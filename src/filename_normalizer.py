@@ -16,6 +16,11 @@ import hashlib
 
 _filesystem_cache = {}
 
+def report_progress(callback,phase,done=0,total=0,current=''):
+    if callback is not None:
+        try:callback(dict(phase=phase,done=done,total=total,current=current))
+        except Exception:pass  # Presentation must not change transaction behavior.
+
 def filesystem_type(path, device):
     if os.name != 'nt':return 'NTFS'
     key=(str(Path(path).absolute().anchor),device)
@@ -337,8 +342,9 @@ def batch_lock(audit_root, root, batch, recovery=False):
     finally:lock.unlink(missing_ok=True)
 
 
-def rollback(record, manifest, mover=move_no_replace):
+def rollback(record, manifest, mover=move_no_replace, progress=None):
     root = Path(record['plan']['root']); rows = record['rows']; errors = []
+    report_progress(progress,'rollback_prepare',0,len(rows))
     def save():
         try:write_json(manifest, record)
         except OSError as exc:errors.append(f'写恢复记录失败：{exc}')
@@ -360,6 +366,8 @@ def rollback(record, manifest, mover=move_no_replace):
             mover(safe_path(root,current), safe_path(root,row['temp']))
             row['current'] = row['temp']; save()
         except (OSError,ValueError) as exc:errors.append(f'{current} → {row["temp"]}：{exc}')
+    restored_count=sum(row.get('current')==row['old'] for row in rows)
+    report_progress(progress,'rollback',restored_count,len(rows))
     for row in rows:
         if row.get('current') == row['old']:
             continue
@@ -371,6 +379,7 @@ def rollback(record, manifest, mover=move_no_replace):
                 raise ValueError('恢复前文件再次变化。')
             mover(safe_path(root,row['temp']), safe_path(root,row['old']))
             row['current'] = row['old']; save()
+            restored_count+=1;report_progress(progress,'rollback',restored_count,len(rows),row['old'])
         except (OSError,ValueError) as exc:errors.append(f'{row["temp"]} → {row["old"]}：{exc}')
     record['states'] = locate_states(root, rows)
     record['recovery_errors'] = errors
@@ -405,9 +414,10 @@ def verify_after(plan, rows):
                 old_path_rule='若旧路径同时是另一文件的最终目标，则核对该目标的文件身份，而非要求路径消失。')
 
 
-def execute(plan, audit_directory, *, mover=move_no_replace):
+def execute(plan, audit_directory, *, mover=move_no_replace, progress=None):
     """Caller must show the full preview and obtain an explicit Execute click first."""
     # Rebuild instead of trusting an edited mapping, and detect additions/deletions/metadata changes.
+    report_progress(progress,'prepare')
     plan = json.loads(json.dumps(plan))
     if plan['issues']:
         raise ValueError('本批次存在问题，已阻止整批执行。')
@@ -434,7 +444,10 @@ def execute(plan, audit_directory, *, mover=move_no_replace):
         staged=any(os.path.lexists(safe_path(root,r['new'])) for r in changed)
         if staged:
             for r in changed:
-                if r['inode']==0:r['content_sha256']=content_hash(safe_path(root,r['old']))
+                if r['inode']==0:
+                    report_progress(progress,'hash',current=r['old'])
+                    r['content_sha256']=content_hash(safe_path(root,r['old']))
+        report_progress(progress,'record',0,len(changed))
         record = dict(schema=1,status='prepared',plan=plan,rows=rows,manifest=str(manifest),notice=NOTICE)
         write_json(manifest, record)
         data = audit_rows(plan)
@@ -448,7 +461,9 @@ def execute(plan, audit_directory, *, mover=move_no_replace):
             # Only collisions with another source (including case-only renames) need staging.
             staged=any(os.path.lexists(safe_path(root,r['new'])) for r in changed)
             record['strategy']='staged' if staged else 'direct'
-            for r in changed:
+            phase='stage' if staged else 'rename'
+            report_progress(progress,phase,0,len(changed))
+            for index,r in enumerate(changed,1):
                 source = safe_path(root,r['old'])
                 if not matches_row(source,r):
                     raise ValueError('执行前文件发生变化：'+r['old'])
@@ -457,11 +472,15 @@ def execute(plan, audit_directory, *, mover=move_no_replace):
                 r['current']=destination;write_json(manifest,record)
                 if not matches_row(safe_path(root,destination),r):
                     raise ValueError('改名后文件元数据发生变化：'+destination)
-            for r in changed if staged else []:
+                report_progress(progress,phase,index,len(changed),r['new'])
+            if staged:report_progress(progress,'rename',0,len(changed))
+            for index,r in enumerate(changed if staged else [],1):
                 if not matches_row(safe_path(root,r['temp']),r):
                     raise ValueError('执行时临时文件发生变化：'+r['temp'])
                 mover(safe_path(root,r['temp']),safe_path(root,r['new']))
                 r['current']=r['new'];write_json(manifest,record)
+                report_progress(progress,'rename',index,len(changed),r['new'])
+            report_progress(progress,'verify',len(changed),len(changed))
             record['verification']=verify_after(plan,rows)
             record['status']='verified';record['success']=len(changed)
             record['unchanged']=len(rows)-len(changed);write_json(manifest,record)
@@ -469,11 +488,11 @@ def execute(plan, audit_directory, *, mover=move_no_replace):
             record['error']=str(exc);record['status']='rolling_back'
             try:write_json(manifest,record)
             except OSError:pass
-            record=rollback(record,manifest,mover)
+            record=rollback(record,manifest,mover,progress)
         return record
 
 
-def recover(manifest_path, *, mover=move_no_replace):
+def recover(manifest_path, *, mover=move_no_replace, progress=None):
     """Explicit recovery from a recorded interrupted/failed batch; never overwrites any file."""
     manifest = Path(manifest_path).resolve()
     record = json.loads(manifest.read_text(encoding='utf-8'))
@@ -485,4 +504,4 @@ def recover(manifest_path, *, mover=move_no_replace):
             if row.get(field):safe_path(root,row[field])
     record['manifest']=str(manifest)
     with batch_lock(manifest.parent.parent,root,record['plan']['batch'],recovery=True):
-        return rollback(record,manifest,mover)
+        return rollback(record,manifest,mover,progress)

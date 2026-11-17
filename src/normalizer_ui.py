@@ -84,11 +84,18 @@ class NormalizerPage(ctk.CTkFrame):
         owner.label(self.empty,'检查和预览不会修改文件。',12,color=colors['muted']).pack(anchor='center')
         self.details=ctk.CTkTextbox(tabs.tab('检查详情'),font=owner.font(12),wrap='word',fg_color=colors['soft'],text_color=colors['text'])
         self.details.pack(fill='both',expand=True);self.set_details(engine.NOTICE)
-        foot=ctk.CTkFrame(self,fg_color='transparent');foot.grid(row=4,column=0,sticky='ew',pady=(10,0))
+        self.progress_box=ctk.CTkFrame(self,fg_color='transparent')
+        self.progress_box.grid(row=4,column=0,sticky='ew',pady=(10,0))
+        self.progress_text=tk.StringVar(value='等待执行')
+        owner.label(self.progress_box,textvariable=self.progress_text,size=12,color=colors['muted'],wraplength=950).pack(anchor='w',pady=(0,5))
+        self.task_progress=ctk.CTkProgressBar(self.progress_box,height=6,corner_radius=3,progress_color=colors['blue'],fg_color=colors['border'])
+        self.task_progress.pack(fill='x');self.task_progress.set(0)
+        self.progress_box.grid_remove();self._progress_phase=None;self._progress_fraction=0;self._staged_progress=False
+        foot=ctk.CTkFrame(self,fg_color='transparent');foot.grid(row=5,column=0,sticky='ew',pady=(10,0))
         self.more_button=self.button(foot,'更多操作…',self.more_actions,108);self.more_button.pack(side='left')
         self.execute_button=self.button(foot,'确认改名',self.execute,160,True,completion=True);self.execute_button.pack(side='right')
         self.scan_button=self.button(foot,'检查文件并预览',self.scan,158,completion=True);self.scan_button.pack(side='right',padx=(0,10))
-        owner.label(self,'时间步来自 DAT 文件名；不会启动 Fluent 读取内部计算结果。双击表格行可查看完整名称与位置。',11,color=colors['muted'],wraplength=950).grid(row=5,column=0,sticky='w',pady=(8,0))
+        owner.label(self,'时间步来自 DAT 文件名；不会启动 Fluent 读取内部计算结果。双击表格行可查看完整名称与位置。',11,color=colors['muted'],wraplength=950).grid(row=6,column=0,sticky='w',pady=(8,0))
         self.directory.trace_add('write',self.directory_changed);self.prefix.trace_add('write',self.invalidate)
         self.update_hints();self.show_empty();self.sync();self.after(100,self.poll)
 
@@ -166,6 +173,7 @@ class NormalizerPage(ctk.CTkFrame):
         window.bind('<Escape>',lambda e:window.destroy())
 
     def invalidate(self,*_):
+        self.task_progress.stop();self.progress_box.grid_remove()
         self.scan_button.reset_feedback();self.execute_button.reset_feedback()
         self.plan=None;self.recovery_manifest=None
         self.update_hints();self.show_empty();self.row_details.clear();self.table.delete(*self.table.get_children())
@@ -190,6 +198,9 @@ class NormalizerPage(ctk.CTkFrame):
         self.scan_button.reset_feedback();self.execute_button.reset_feedback()
         for button in self.owner.completion_buttons.values():button.reset_feedback()
         self.running=True;self.owner.busy=True
+        self._progress_phase=None;self._progress_fraction=0;self._staged_progress=False
+        self.progress_box.grid();self.task_progress.configure(progress_color=self.c['blue'])
+        self.show_progress(dict(phase='scan' if kind=='preview' else 'prepare',done=0,total=0,current=''))
         for control in self.owner.controls:control.configure(state='disabled')
         self.sync();self.status.set('正在扫描与检查…' if kind=='preview' else '正在执行，请等待当前批次完成…')
         def work():
@@ -208,10 +219,10 @@ class NormalizerPage(ctk.CTkFrame):
         if not self.enabled.get() or self.owner.busy:return
         if self.recovery_manifest:
             manifest=self.recovery_manifest;self.recovery_manifest=None
-            self.run_job('recover',lambda:engine.recover(manifest))
+            self.run_job('recover',lambda:engine.recover(manifest,progress=self.enqueue_progress))
         elif self.plan is not None and not self.plan['issues']:
             plan=self.plan;self.plan=None
-            self.run_job('execute',lambda:engine.execute(plan,self.audit_directory))
+            self.run_job('execute',lambda:engine.execute(plan,self.audit_directory,progress=self.enqueue_progress))
 
     def show_plan(self,plan):
         self.display_root=plan['root']
@@ -285,20 +296,71 @@ class NormalizerPage(ctk.CTkFrame):
     def open_record(self):
         if self.last_manifest:os.startfile(str(Path(self.last_manifest).parent))
 
+    def enqueue_progress(self,update):
+        # Called on worker thread: enqueue only, never touch Tk here.
+        self.events.put(('progress',update,None))
+
+    def show_progress(self,update):
+        phase=update['phase'];done=update.get('done',0);total=update.get('total',0)
+        labels={'scan':'正在扫描与检查','prepare':'正在复核预览','record':'正在保存改名清单',
+                'hash':'正在计算交换文件的校验值','stage':'正在暂存交换文件',
+                'rename':'正在改名','verify':'正在核验改名结果',
+                'rollback_prepare':'出现异常，正在准备恢复原名','rollback':'正在恢复原名'}
+        indefinite=phase in ('scan','prepare','record','hash','rollback_prepare')
+        if phase!=self._progress_phase:
+            self.task_progress.stop();self.task_progress.configure(mode='indeterminate' if indefinite else 'determinate')
+            if indefinite:self.task_progress.start()
+            self._progress_phase=phase
+        if not indefinite:
+            ratio=done/total if total else 0
+            if phase=='stage':self._staged_progress=True;value=.45*ratio
+            elif phase=='rename':value=(.45 if self._staged_progress else 0)+(.5 if self._staged_progress else .95)*ratio
+            elif phase=='verify':value=.97
+            else:value=.95*ratio
+            self._progress_fraction=value;self.task_progress.set(value)
+        text=labels.get(phase,phase)
+        if phase in ('stage','rename','rollback'):text+=f' · {done} / {total} 个文件'
+        if phase=='verify':text+=f' · 已改名 {done} 个，正在核对数量与元数据'
+        if update.get('current'):text+=' · '+Path(update['current']).name[-65:]
+        self.progress_text.set(text)
+
+    def finish_job(self,kind,result,error):
+        self.running=False;self.owner.busy=False
+        self.task_progress.stop();self.task_progress.configure(mode='determinate')
+        for control in self.owner.controls:control.configure(state='normal')
+        if error:
+            self.plan=None;self.recovery_manifest=None;self.status.set('已阻止执行或任务失败 · 请查看问题详情。')
+            self.set_details(error+'\n\n'+engine.NOTICE);self.tabs.set('检查详情')
+            self.task_progress.set(self._progress_fraction);self.progress_text.set('已停止 · 请查看问题详情')
+            self.task_progress.configure(progress_color='#B56A5A')
+        elif kind=='preview':
+            self.plan=result;self.show_plan(result);self.task_progress.set(1)
+            self.progress_text.set('检查完成 · 请核对预览和问题清单')
+        else:
+            self.show_result(result)
+            ok=result['status']=='verified' or (result['status']=='rolled_back' and not result.get('recovery_errors'))
+            self.task_progress.set(1 if ok else self._progress_fraction)
+            self.task_progress.configure(progress_color=self.c['blue'] if ok else '#B56A5A')
+            if result['status']=='verified':self.progress_text.set(f'完成 · 已改名 {result.get("success",0)} 个 · 无需修改 {result.get("unchanged",0)} 个 · 核验通过')
+            elif ok:self.progress_text.set('恢复完成 · 本批次已恢复原文件名')
+            else:self.progress_text.set('恢复未完成 · 请保留文件和记录，查看问题详情')
+        self.sync()
+        if not error:
+            if kind=='preview' and not result['issues']:self.scan_button.success()
+            elif kind=='execute' and result['status']=='verified':self.execute_button.success()
+            elif kind=='recover' and result['status']=='rolled_back' and not result.get('recovery_errors'):self.execute_button.success()
+
     def poll(self):
+        latest=None
         try:
-            kind,result,error=self.events.get_nowait()
-            self.running=False;self.owner.busy=False
-            for control in self.owner.controls:control.configure(state='normal')
-            if error:
-                self.plan=None;self.recovery_manifest=None;self.status.set('已阻止执行或任务失败 · 请查看问题详情。')
-                self.set_details(error+'\n\n'+engine.NOTICE);self.tabs.set('检查详情')
-            elif kind=='preview':self.plan=result;self.show_plan(result)
-            else:self.show_result(result)
-            self.sync()
-            if not error:
-                if kind=='preview' and not result['issues']:self.scan_button.success()
-                elif kind=='execute' and result['status']=='verified':self.execute_button.success()
-                elif kind=='recover' and result['status']=='rolled_back' and not result.get('recovery_errors'):self.execute_button.success()
+            for _ in range(200):
+                kind,result,error=self.events.get_nowait()
+                if kind=='progress':latest=result;continue
+                if latest is not None:self.show_progress(latest);latest=None
+                self.finish_job(kind,result,error)
+                break
         except queue.Empty:pass
-        self.after(100,self.poll)
+        except Exception:self.owner.report_callback_exception(*__import__('sys').exc_info())
+        finally:
+            if latest is not None and self.running:self.show_progress(latest)
+            self.after(100,self.poll)
