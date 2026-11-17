@@ -5,6 +5,8 @@ import sys
 import tempfile
 import subprocess
 import unittest
+import os
+from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
 import filename_normalizer as n
@@ -74,7 +76,7 @@ class NamingTests(unittest.TestCase):
         def failing(src,dst):
             nonlocal calls
             calls+=1
-            if calls==6:raise OSError('模拟第二个提交失败')
+            if calls==3:raise OSError('模拟第三个改名失败')
             n.move_no_replace(src,dst)
         result=n.execute(self.plan(),self.audit,mover=failing)
         self.assertEqual(result['status'],'rolled_back',result);self.assertEqual(before,self.content())
@@ -84,7 +86,7 @@ class NamingTests(unittest.TestCase):
         def failing(src,dst):
             nonlocal calls
             calls+=1
-            if calls>=3:raise OSError('模拟磁盘暂时不可写')
+            if calls>=2:raise OSError('模拟磁盘暂时不可写')
             n.move_no_replace(src,dst)
         result=n.execute(self.plan(),self.audit,mover=failing)
         self.assertEqual(result['status'],'recovery_failed');self.assertTrue(result['recovery_errors'])
@@ -144,11 +146,11 @@ class NamingTests(unittest.TestCase):
         def racing(src,dst):
             nonlocal calls
             calls+=1
-            if calls==3:Path(dst).write_bytes(b'foreign')
+            if calls==2:Path(dst).write_bytes(b'foreign')
             n.move_no_replace(src,dst)
         r=n.execute(self.plan(),self.audit,mover=racing)
         self.assertEqual(r['status'],'rolled_back',r)
-        self.assertEqual((self.root/'fuxian_fadhl-00100.cas').read_bytes(),b'foreign')
+        self.assertEqual((self.root/'fuxian_fadhl-00100.dat').read_bytes(),b'foreign')
         self.assertTrue((self.root/'save.cas').exists())
     def test_21_preserve_uppercase_extension(self):
         self.put('save.CAS.H5');self.put('save-00100.DAT.H5');self.run_plan(self.plan())
@@ -162,7 +164,7 @@ class NamingTests(unittest.TestCase):
             nonlocal calls
             calls+=1
             n.move_no_replace(src,dst)
-            if calls==4:self.put('unrelated.txt')
+            if calls==2:self.put('unrelated.txt')
         r=n.execute(self.plan(),self.audit,mover=racing)
         self.assertEqual(r['status'],'rolled_back',r)
         self.assertIn('执行后',r['error']);self.assertTrue((self.root/'save.cas').exists())
@@ -200,6 +202,31 @@ class NamingTests(unittest.TestCase):
     def test_28_pending_recovery_blocks_new_batch(self):
         self.pair('save','00100');self.put('.fluent-rename-interrupted.tmp')
         self.assertIn('pending_recovery',self.codes(self.plan()))
+
+    def test_29_normal_batch_is_direct(self):
+        self.pair('save','00100');moves=[]
+        def observe(src,dst):
+            moves.append(Path(dst).name);n.move_no_replace(src,dst)
+        result=n.execute(self.plan(),self.audit,mover=observe)
+        self.assertEqual(result['status'],'verified');self.assertEqual(result['strategy'],'direct')
+        self.assertEqual(len(moves),2);self.assertFalse(any(name.endswith('.tmp') for name in moves))
+    def test_30_exfat_identity_is_not_compared(self):
+        p=self.put('sample.cas')
+        with patch.object(n,'filesystem_type',return_value='EXFAT'):
+            self.assertEqual(n.fingerprint(p)['inode'],0)
+
+
+@unittest.skipUnless(os.environ.get('FLUENT_TEST_VOLUME'),'Optional real volume tests')
+class VolumeNamingTests(NamingTests):
+    def setUp(self):
+        self.volume=Path(os.environ['FLUENT_TEST_VOLUME']).resolve()
+        self.tmp=tempfile.TemporaryDirectory(prefix='FluentRenameTest_',dir=self.volume)
+        self.base=Path(self.tmp.name).resolve()
+        assert self.base.parent==self.volume and self.base.name.startswith('FluentRenameTest_')
+        self.root=self.base/'中文 含空格';self.root.mkdir();self.audit=self.base/'audit'
+    def tearDown(self):
+        assert self.base.resolve().parent==self.volume and self.base.name.startswith('FluentRenameTest_')
+        super().tearDown()
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

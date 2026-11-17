@@ -12,6 +12,24 @@ from pathlib import Path
 import re
 import stat
 import uuid
+import hashlib
+
+_filesystem_cache = {}
+
+def filesystem_type(path, device):
+    if os.name != 'nt':return 'NTFS'
+    key=(str(Path(path).absolute().anchor),device)
+    if key not in _filesystem_cache:
+        api=ctypes.WinDLL('kernel32',use_last_error=True)
+        volume=ctypes.create_unicode_buffer(32768);name=ctypes.create_unicode_buffer(256)
+        if not api.GetVolumePathNameW(ctypes.c_wchar_p(str(Path(path).absolute())),volume,len(volume)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not api.GetVolumeInformationW(volume,None,0,None,None,None,name,len(name)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if name.value.upper() not in ('NTFS','REFS','EXFAT','FAT','FAT32'):
+            raise OSError('暂不支持此文件系统的安全改名：'+name.value)
+        _filesystem_cache[key]=name.value.upper()
+    return _filesystem_cache[key]
 
 EXT = re.compile(r'(\.cas\.h5|\.dat\.h5|\.cas|\.dat)$', re.I)
 STEP = re.compile(r'^(.*)-([0-9]+)$')
@@ -28,7 +46,18 @@ def split_name(name):
 
 def fingerprint(path):
     s = Path(path).lstat()
-    return dict(size=s.st_size, mtime_ns=s.st_mtime_ns, device=s.st_dev, inode=s.st_ino)
+    # FAT-family file indexes may change on rename. They are not stable identities.
+    stable_id=filesystem_type(path,s.st_dev) in ('NTFS','REFS')
+    return dict(size=s.st_size, mtime_ns=s.st_mtime_ns, device=s.st_dev, inode=s.st_ino if stable_id else 0)
+
+def content_hash(path):
+    h=hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda:stream.read(4*1024*1024),b''):h.update(block)
+    return h.hexdigest()
+
+def matches_row(path,row):
+    return fingerprint(path)=={k:row[k] for k in ('size','mtime_ns','device','inode')} and (not row.get('content_sha256') or content_hash(path)==row['content_sha256'])
 
 
 def linked(path):
@@ -259,7 +288,7 @@ def locate_states(root, rows):
                 exists = os.path.lexists(p)
                 actual = fingerprint(p) if exists else None
                 observed.append(dict(path=rel,exists=exists,metadata=actual))
-                if p.is_file() and actual == {k:r[k] for k in ('size','mtime_ns','device','inode')}:
+                if p.is_file() and actual == {k:r[k] for k in ('size','mtime_ns','device','inode')} and (not r.get('content_sha256') or content_hash(p)==r['content_sha256']):
                     found.append(rel)
             except (OSError,ValueError) as exc:
                 observed.append(dict(path=rel,error=str(exc)))
@@ -326,7 +355,7 @@ def rollback(record, manifest, mover=move_no_replace):
         if current == row['old'] or current == row.get('temp'):
             continue
         try:
-            if fingerprint(safe_path(root,current)) != {k:row[k] for k in ('size','mtime_ns','device','inode')}:
+            if not matches_row(safe_path(root,current),row):
                 raise ValueError('恢复前文件再次变化。')
             mover(safe_path(root,current), safe_path(root,row['temp']))
             row['current'] = row['temp']; save()
@@ -338,7 +367,7 @@ def rollback(record, manifest, mover=move_no_replace):
             errors.append(f'未能安全暂存，需人工恢复：{row["old"]}')
             continue
         try:
-            if fingerprint(safe_path(root,row['temp'])) != {k:row[k] for k in ('size','mtime_ns','device','inode')}:
+            if not matches_row(safe_path(root,row['temp']),row):
                 raise ValueError('恢复前文件再次变化。')
             mover(safe_path(root,row['temp']), safe_path(root,row['old']))
             row['current'] = row['old']; save()
@@ -362,6 +391,8 @@ def verify_after(plan, rows):
         raise ValueError('执行后文件数量、路径或元数据核验失败：'+'；'.join(differences))
     targets = {r['new'] for r in rows}
     for r in rows:
+        if r.get('content_sha256') and not matches_row(safe_path(root,r['new']),r):
+            raise ValueError('交换后文件内容核验失败：'+r['new'])
         if r['old'] != r['new'] and r['old'] not in targets and r['old'] in current:
             raise ValueError('已更名的旧路径仍存在：'+r['old'])
         if r.get('temp') in current:
@@ -399,6 +430,11 @@ def execute(plan, audit_directory, *, mover=move_no_replace):
         for r in rows:
             r['current'] = r['old']
             r['temp'] = (Path(r['old']).parent/('.fluent-rename-'+uuid.uuid4().hex+'.tmp')).as_posix() if r['old'] != r['new'] else None
+        changed = [r for r in rows if r['old'] != r['new']]
+        staged=any(os.path.lexists(safe_path(root,r['new'])) for r in changed)
+        if staged:
+            for r in changed:
+                if r['inode']==0:r['content_sha256']=content_hash(safe_path(root,r['old']))
         record = dict(schema=1,status='prepared',plan=plan,rows=rows,manifest=str(manifest),notice=NOTICE)
         write_json(manifest, record)
         data = audit_rows(plan)
@@ -409,14 +445,20 @@ def execute(plan, audit_directory, *, mover=move_no_replace):
         try:
             assert_unchanged(plan)
             record['status']='executing';write_json(manifest,record)
+            # Only collisions with another source (including case-only renames) need staging.
+            staged=any(os.path.lexists(safe_path(root,r['new'])) for r in changed)
+            record['strategy']='staged' if staged else 'direct'
             for r in changed:
                 source = safe_path(root,r['old'])
-                if fingerprint(source) != {k:r[k] for k in ('size','mtime_ns','device','inode')}:
+                if not matches_row(source,r):
                     raise ValueError('执行前文件发生变化：'+r['old'])
-                mover(source,safe_path(root,r['temp']))
-                r['current']=r['temp'];write_json(manifest,record)
-            for r in changed:
-                if fingerprint(safe_path(root,r['temp'])) != {k:r[k] for k in ('size','mtime_ns','device','inode')}:
+                destination=r['temp'] if staged else r['new']
+                mover(source,safe_path(root,destination))
+                r['current']=destination;write_json(manifest,record)
+                if not matches_row(safe_path(root,destination),r):
+                    raise ValueError('改名后文件元数据发生变化：'+destination)
+            for r in changed if staged else []:
+                if not matches_row(safe_path(root,r['temp']),r):
                     raise ValueError('执行时临时文件发生变化：'+r['temp'])
                 mover(safe_path(root,r['temp']),safe_path(root,r['new']))
                 r['current']=r['new'];write_json(manifest,record)
