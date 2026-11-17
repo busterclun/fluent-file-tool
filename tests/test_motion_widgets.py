@@ -27,6 +27,27 @@ class MotionTests(unittest.TestCase):
         self.assertEqual(len(feedback_frame(.7,160,36)['particles']),10)
         self.assertFalse(feedback_frame(.5,160,36)['particles'])
         self.assertTrue(feedback_frame(1.28,160,36)['done'])
+    def test_close_during_initialization_is_deferred(self):
+        self.root._initializing=True;self.root.close()
+        self.assertTrue(self.root._close_requested);self.assertTrue(self.root.winfo_exists())
+        self.root._initializing=False
+    def test_actual_primary_button_named_white_completes(self):
+        button=self.root.completion_buttons['convert']
+        self.assertEqual(button.cget('text_color'),'white')
+        button.success(animate_hidden=True);self.pump(1.4)
+        self.assertEqual(button.feedback_stages,['shrink','check','particles','restore'])
+        self.assertFalse(button.feedback_running);self.assertIsNone(button._effect_canvas)
+    def test_animation_failure_keeps_completed_status_and_polling(self):
+        button=self.root.completion_buttons['convert']
+        original=button.success
+        def fail():raise ValueError('simulated animation failure')
+        button.success=fail;self.root.busy=True
+        self.root.events.put(('done',(0,'convert')));self.root.poll()
+        self.assertFalse(self.root.busy)
+        self.assertIn('完成',self.root.status.get())
+        self.assertEqual(len(self.errors),1);self.errors.clear();button.success=original
+        self.root.events.put(('line','polling still works\n'));self.pump(.2)
+        self.assertIn('polling still works',self.root.log.get('1.0','end'))
     def test_animation_runs_and_does_not_change_layout_or_state(self):
         calls=[];b=CompletionButton(self.root,text='完成',width=160,height=36,command=lambda:calls.append('clicked'))
         b.grid(row=9,column=0);b.configure(state='disabled');before=(b.cget('width'),b.cget('height'),b.cget('state'))

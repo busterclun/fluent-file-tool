@@ -1,5 +1,5 @@
 """Fluent File Tool desktop application."""
-import json, os, queue, re, subprocess, sys, threading
+import json, os, queue, re, subprocess, sys, threading, traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
@@ -20,7 +20,9 @@ ctk.set_default_color_theme('blue')
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title('Fluent 文件转换工具 · v1.0.0');self.geometry('1120x820');self.minsize(1000,720)
+        self._initializing=True;self._close_requested=False
+        self.protocol('WM_DELETE_WINDOW',self.close)
+        self.title('Fluent 文件转换工具 · v1.0.1');self.geometry('1120x820');self.minsize(1000,720)
         self.configure(fg_color=C['bg'])
         try:config={**DEFAULTS,**json.loads(CONFIG.read_text(encoding='utf-8'))}
         except (OSError,ValueError):config=DEFAULTS
@@ -46,7 +48,10 @@ class App(ctk.CTk):
         self.normalizer=NormalizerPage(self.content,self,BASE/'命名记录',C);self.pages['normalize']=self.normalizer
         for key in ['prefix','digits']:self.vars[key].trace_add('write',self.preview)
         self.preview();self.show_page('work')
-        self.after(100,self.poll);self.protocol('WM_DELETE_WINDOW',self.close)
+        self.after(100,self.poll);self._initializing=False
+        # CTk.mainloop performs its own initial window setup before entering Tk.
+        # An idle callback can run inside that setup; defer until the event loop starts.
+        if self._close_requested:self.after(100,self.close)
     def font(self,size=14,bold=False):return ctk.CTkFont(family='Microsoft YaHei UI',size=size,weight='bold' if bold else 'normal')
     def label(self,parent,text='',size=14,bold=False,color=None,**kw):
         return ctk.CTkLabel(parent,text=text,font=self.font(size,bold),text_color=color or C['text'],anchor='w',justify='left',**kw)
@@ -292,17 +297,33 @@ class App(ctk.CTk):
                     rc,action=data;self.busy=False;self.progress.stop();self.progress.configure(mode='determinate');self.progress.set(1 if rc==0 else 0);self.stop.configure(state='disabled')
                     for c in self.controls:c.configure(state='normal')
                     self.normalizer.sync()
-                    if rc==0 and action in self.completion_buttons:self.completion_buttons[action].success()
                     self.status.set('扫描完成' if rc==0 and action=='scan' else '环境检查通过' if rc==0 and action=='environment' else '完成 · 点击“打开结果”查看文件' if rc==0 else '已停止 · 下次使用相同目录可继续' if rc==2 else '任务失败 · 详细原因见日志')
                     if action=='environment':self.env_status.set('路径与 Python 依赖检查通过' if rc==0 else '环境检查失败，请查看日志')
                     if action not in ['scan','environment']:self.detail.set('文件名对照与验证报告已保存到输出目录。' if rc==0 else '已完成文件会保留。查看日志后，可使用相同目录继续。')
                     self.append('\n'+self.status.get()+'\n')
                     if rc==1:self.show_log()
+                    if rc==0 and action in self.completion_buttons:self.completion_buttons[action].success()
         except queue.Empty:pass
-        self.after(100,self.poll)
+        except Exception:
+            self.report_callback_exception(*sys.exc_info())
+        finally:
+            self.after(100,self.poll)
+    def report_callback_exception(self,exc_type,exc_value,exc_traceback):
+        # Optional UI feedback must never leave a blocking overlay behind.
+        for button in self.completion_buttons.values():button.reset_feedback()
+        for button in (self.normalizer.scan_button,self.normalizer.execute_button):button.reset_feedback()
+        text='界面反馈异常（不代表转换失败）：\n'+''.join(traceback.format_exception(exc_type,exc_value,exc_traceback))
+        try:
+            folder=BASE/'运行日志';folder.mkdir(exist_ok=True)
+            with (folder/'界面错误.log').open('a',encoding='utf-8') as stream:stream.write(text+'\n')
+            self.append('\n'+text+'\n')
+        except (OSError,tk.TclError):pass
     def request_stop(self):
         if self.busy and self.stop_path:self.stop_path.write_text('stop',encoding='utf-8');self.stop.configure(state='disabled');self.status.set('已请求停止');self.detail.set('正在等待当前组安全完成…')
     def close(self):
+        if self._initializing:
+            self._close_requested=True
+            return
         if self.busy:messagebox.showinfo('任务正在运行','请等待当前任务结束；Fluent 转换任务可点击“本组完成后停止”。',parent=self);return
         self.destroy()
 

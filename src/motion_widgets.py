@@ -89,6 +89,11 @@ class CompletionButton(ctk.CTkButton):
         self._effect_color=self._apply_appearance_mode(self.cget('fg_color'))
         if self._effect_color=='transparent':self._effect_color='#5267A2'
         self._effect_text_color=self._apply_appearance_mode(self.cget('text_color'))
+        # Tk accepts named colors (notably the primary button's 'white').
+        # Interpolation needs canonical RGB rather than slicing the original string.
+        for attr in ('_effect_bg','_effect_color','_effect_text_color'):
+            rgb=self.winfo_rgb(getattr(self,attr))
+            setattr(self,attr,'#'+''.join(f'{v//257:02x}' for v in rgb))
         self._effect_text=self.cget('text')
         self._effect_canvas=tk.Canvas(self._effect_window,highlightthickness=0,bd=0,bg=self._effect_bg)
         self._effect_canvas.bind('<Button-1>',lambda e:'break')
