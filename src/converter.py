@@ -103,6 +103,12 @@ def snapshot(s, has_data):
     return {'zones': topology, 'domains': sorted(zi.domains), 'time': clock}, arrays
 
 
+def output_names(c, d, stem, jobs):
+    # A shared CASE must not be overwritten by the next DAT's verified CASE.
+    folder = Path(stem) if sum(case == c for case, _, _ in jobs) > 1 else Path()
+    return [folder / c.name[:-3]] + ([folder / d.name[:-3]] if d else [])
+
+
 def array_summary(arrays):
     result = {}
     for key, a in arrays.items():
@@ -167,23 +173,23 @@ def main():
         jobs = jobs[:args.limit]
     if args.list:
         for c, d, stem in jobs:
-            print(f'{c.name} + {d.name if d else "[CASE ONLY]"} -> {stem}.cas'
-                  + (f' / {stem}.dat' if d else ''))
+            print(f'{c.name} + {d.name if d else "[CASE ONLY]"} -> '+ ' / '.join(str(p) for p in output_names(c,d,stem,jobs)))
         return 0
     output.mkdir(parents=True, exist_ok=True)
     report_path = output / 'conversion_report.json'
     previous = {}
     if args.resume and report_path.exists():
         previous = json.loads(report_path.read_text(encoding='utf-8'))
+        if previous.get('naming_policy') != 'preserve-source-v1':
+            raise ValueError('此目录包含旧版转换报告。保留原名模式请使用新的输出目录；旧结果不会被修改。')
     old = {j['stem']: j for j in previous.get('jobs', [])}
     pending, completed = [], []
     for c, d, stem in jobs:
         sources = {p.name: sha256(p) for p in [c, d] if p}
         record = old.get(stem)
-        targets = [output / (stem + '.cas')] + ([output / (stem + '.dat')] if d else [])
-        if record and record.get('output_sha256'):
-            targets = [output / filename for filename in record['output_sha256']]
+        targets = [output / name for name in output_names(c,d,stem,jobs)]
         if (record and record.get('status') == 'verified'
+                and set(record.get('output_sha256',{})) == {p.relative_to(output).as_posix() for p in targets}
                 and record.get('source_sha256') == sources
                 and all(p.is_file() and record.get('output_sha256', {}).get(p.relative_to(output).as_posix())
                         == sha256(p) for p in targets)):
@@ -196,7 +202,7 @@ def main():
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     work = output / '_logs' / stamp
     work.mkdir(parents=True, exist_ok=True)
-    report = {'created_local': datetime.now().isoformat(), 'fluent_version': args.version,
+    report = {'naming_policy':'preserve-source-v1','created_local': datetime.now().isoformat(), 'fluent_version': args.version,
               'dimension': args.dimension, 'precision': 'double', 'processors': 1,
               'input_directory': str(root), 'output_directory': str(output),
               'validation': 'Full-cell exact array comparison after CAS/DAT readback; mesh zone metadata and flow time/step comparison; header and SHA256 checks',
@@ -253,10 +259,16 @@ def main():
             for p in [c, d]:
                 if p and sha256(p) != source_hashes[p.name]:
                     raise RuntimeError(f'Source changed during conversion: {p}')
-            sizes = {stem + p.suffix: p.stat().st_size for p in targets}
-            hashes = {stem + p.suffix: sha256(p) for p in targets}
-            for p in targets:
-                shutil.move(str(p), str(output / (stem + p.suffix)))
+            names=output_names(c,d,stem,jobs)
+            sizes = {name.as_posix(): p.stat().st_size for name,p in zip(names,targets)}
+            hashes = {name.as_posix(): sha256(p) for name,p in zip(names,targets)}
+            for p,name in zip(targets,names):
+                dest=output/name;dest.parent.mkdir(parents=True,exist_ok=True)
+                # Exclusive creation works across TEMP/output drives without overwriting.
+                with p.open('rb') as source, dest.open('xb') as target:
+                    shutil.copyfileobj(source,target,4*1024*1024)
+                if sha256(dest)!=hashes[name.as_posix()]:
+                    raise RuntimeError(f'Output copy verification failed: {dest}')
             record = {'stem': stem, 'case_source': c.name,
                       'data_source': d.name if d else None,
                       'status': 'verified', 'source_sha256': source_hashes,

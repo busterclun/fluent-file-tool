@@ -86,7 +86,7 @@ class MotionTests(unittest.TestCase):
         self.assertEqual(p.example_label.cget('text_color'),app.C['muted'])
         self.assertEqual(p.scope_label.cget('text_color'),app.C['muted'])
     def test_all_task_buttons_use_shared_feedback(self):
-        self.assertEqual(set(self.root.completion_buttons),{'save','environment','scan','organize','convert'})
+        self.assertEqual(set(self.root.completion_buttons),{'save','environment','scan','convert'})
         for button in self.root.completion_buttons.values():self.assertIsInstance(button,CompletionButton)
         self.assertIsInstance(self.root.normalizer.scan_button,CompletionButton)
         self.assertIsInstance(self.root.normalizer.execute_button,CompletionButton)

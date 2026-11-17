@@ -22,7 +22,7 @@ class App(ctk.CTk):
         super().__init__()
         self._initializing=True;self._close_requested=False
         self.protocol('WM_DELETE_WINDOW',self.close)
-        self.title('Fluent 文件转换工具 · v1.0.1');self.geometry('1120x820');self.minsize(1000,720)
+        self.title('Fluent 文件转换工具 · v1.0.2');self.geometry('1120x820');self.minsize(1000,720)
         self.configure(fg_color=C['bg'])
         try:config={**DEFAULTS,**json.loads(CONFIG.read_text(encoding='utf-8'))}
         except (OSError,ValueError):config=DEFAULTS
@@ -35,7 +35,7 @@ class App(ctk.CTk):
         mark=ctk.CTkLabel(header,text='F',width=40,height=40,corner_radius=10,fg_color=C['blue'],text_color='white',font=self.font(23,True));mark.pack(side='left',padx=(28,14),pady=20)
         brand=ctk.CTkFrame(header,fg_color='transparent');brand.pack(side='left')
         self.label(brand,'Fluent 文件转换工具',22,True).pack(anchor='w')
-        self.label(brand,'真实格式转换 · 按时间步整理',12,color=C['muted']).pack(anchor='w',pady=(2,0))
+        self.label(brand,'保留原名转换 · 独立整理文件名',12,color=C['muted']).pack(anchor='w',pady=(2,0))
         ctk.CTkButton(header,anchor='center',text='使用说明',width=88,height=34,fg_color=C['soft'],text_color=C['muted'],hover_color='#E9EDF3',font=self.font(12),command=self.open_help).pack(side='right',padx=28)
         nav=ctk.CTkFrame(self,fg_color=C['bg']);nav.grid(row=1,column=0,sticky='ew',padx=28,pady=(18,14))
         self.nav_buttons={}
@@ -46,7 +46,6 @@ class App(ctk.CTk):
         self.pages={}
         self.build_work();self.build_environment();self.build_footer();self.build_log()
         self.normalizer=NormalizerPage(self.content,self,BASE/'命名记录',C);self.pages['normalize']=self.normalizer
-        for key in ['prefix','digits']:self.vars[key].trace_add('write',self.preview)
         self.preview();self.show_page('work')
         self.after(100,self.poll);self._initializing=False
         # CTk.mainloop performs its own initial window setup before entering Tk.
@@ -90,16 +89,9 @@ class App(ctk.CTk):
         files=self.card(left);files.pack(fill='x',pady=(0,14))
         self.section(files,'01','选择文件','读取 H5 文件，输出独立的 CAS / DAT 结果。')
         self.path_field(files,'input','H5 输入文件夹','选择同时包含 .cas.h5 和 .dat.h5 的文件夹。')
-        self.path_field(files,'output','结果保存位置','生成的 CAS / DAT、命名对照和验证报告将保存在这里。')
+        self.path_field(files,'output','结果保存位置','保留原名的 CAS / DAT 和验证报告保存在这里。')
         naming=self.card(left);naming.pack(fill='x',pady=(0,14))
-        self.section(naming,'02','命名与模型','统一文件名，并选择与原始模型一致的维度。')
-        inner=ctk.CTkFrame(naming,fg_color='transparent');inner.pack(fill='x',padx=22,pady=(0,18));inner.grid_columnconfigure(0,weight=1);inner.grid_columnconfigure(1,weight=0)
-        a=ctk.CTkFrame(inner,fg_color='transparent');a.grid(row=0,column=0,sticky='nsew',padx=(0,20))
-        self.label(a,'文件名前缀',13,True).pack(anchor='w',pady=(0,6));self.entry(a,'prefix').pack(fill='x')
-        self.label(a,'所有结果共用的名称，例如 fuxian_fadhl。',12,color=C['muted']).pack(anchor='w',pady=(6,0))
-        b=ctk.CTkFrame(inner,fg_color='transparent');b.grid(row=0,column=1,sticky='nsew')
-        self.label(b,'时间步补零位数',13,True).pack(anchor='w',pady=(0,6));self.entry(b,'digits',width=142).pack(anchor='w')
-        self.digit_hint=self.label(b,'5 位：100 → 00100',12,color=C['muted']);self.digit_hint.pack(anchor='w',pady=(6,0))
+        self.section(naming,'02','模型设置','选择与原始模型一致的维度；转换保留原文件名。')
         dims=ctk.CTkFrame(naming,fg_color='transparent');dims.pack(fill='x',padx=22,pady=(0,20))
         self.label(dims,'原始模型维度',13,True).pack(anchor='w',pady=(0,10))
         row=ctk.CTkFrame(dims,fg_color='transparent');row.pack(fill='x')
@@ -109,13 +101,13 @@ class App(ctk.CTk):
         self.label(dims,'与原始 Fluent 模型保持一致；此选项不会改变模型维度。',12,color=C['muted']).pack(anchor='w',pady=(10,0))
         preview=self.card(right);preview.pack(fill='x',pady=(0,14))
         self.label(preview,'输出预览',15,True).pack(anchor='w',padx=20,pady=(20,3))
-        self.label(preview,'以时间步 100 为例',12,color=C['muted']).pack(anchor='w',padx=20)
+        self.label(preview,'只移除末尾的 .h5',12,color=C['muted']).pack(anchor='w',padx=20)
         tile=ctk.CTkFrame(preview,fg_color=C['tint'],corner_radius=8);tile.pack(fill='x',padx=16,pady=16)
         self.example=self.label(tile,'',13,color=C['blue'],wraplength=240);self.example.pack(anchor='w',padx=14,pady=14)
-        self.label(preview,'只调整名称，不改变实际时间步。',12,color=C['muted']).pack(anchor='w',padx=20,pady=(0,18))
+        self.label(preview,'原文件保留；不添加前缀或时间步。',12,color=C['muted']).pack(anchor='w',padx=20,pady=(0,18))
         grouping=self.card(right);grouping.pack(fill='x',pady=(0,14))
-        self.label(grouping,'重复时间步，自动分组',14,True).pack(anchor='w',padx=20,pady=(18,8))
-        self.label(grouping,'当编号重新开始时，分别保存到\nseries_01、series_02…，避免覆盖。',12,color=C['muted'],wraplength=245).pack(anchor='w',padx=20,pady=(0,18))
+        self.label(grouping,'需要改名时再整理',14,True).pack(anchor='w',padx=20,pady=(18,8))
+        self.label(grouping,'转换后到“整理文件名”页面，\n设置前缀、查看预览并确认改名。',12,color=C['muted'],wraplength=245).pack(anchor='w',padx=20,pady=(0,18))
     def build_environment(self):
         page=SmoothScrollableFrame(self.content,fg_color='transparent',corner_radius=0);self.pages['environment']=page
         intro=ctk.CTkFrame(page,fg_color='transparent');intro.pack(fill='x',pady=(2,14))
@@ -147,9 +139,9 @@ class App(ctk.CTk):
         self.progress=ctk.CTkProgressBar(footer,height=3,corner_radius=0,fg_color='#EDF0F5',progress_color=C['blue'],mode='determinate');self.progress.pack(fill='x');self.progress.set(0)
         actions=ctk.CTkFrame(footer,fg_color='transparent');actions.pack(fill='x',padx=28,pady=(12,16))
         self.button(actions,'扫描文件',lambda:self.run('scan'),width=105,completion='scan').pack(side='left',padx=(0,8))
-        self.button(actions,'仅整理已有结果',lambda:self.run('organize'),width=140,completion='organize').pack(side='left')
+        self.button(actions,'整理文件名',lambda:self.show_page('normalize'),width=140).pack(side='left')
         self.stop=ctk.CTkButton(actions,anchor='center',text='本组完成后停止',width=140,height=38,fg_color=C['soft'],text_color=C['muted'],hover_color='#E8ECF2',font=self.font(13),state='disabled',command=self.request_stop);self.stop.pack(side='left',padx=8)
-        self.button(actions,'开始转换并整理',lambda:self.run('convert'),primary=True,width=166,completion='convert').pack(side='right',padx=(8,0))
+        self.button(actions,'开始转换',lambda:self.run('convert'),primary=True,width=166,completion='convert').pack(side='right',padx=(8,0))
         ctk.CTkButton(actions,anchor='center',text='打开结果',width=94,height=38,fg_color='transparent',text_color=C['blue'],hover_color=C['tint'],font=self.font(13),command=self.open_output).pack(side='right')
     def build_log(self):
         self.log_window=ctk.CTkToplevel(self);self.log_window.title('运行日志');self.log_window.geometry('900x520');self.log_window.withdraw();self.log_window.protocol('WM_DELETE_WINDOW',self.log_window.withdraw)
@@ -164,12 +156,7 @@ class App(ctk.CTk):
             else:p.grid_remove()
         for key,b in self.nav_buttons.items():b.configure(fg_color=C['white'] if key==name else 'transparent',text_color=C['blue'] if key==name else C['muted'],hover_color='#E9EDF4',border_width=1 if key==name else 0,border_color=C['border'])
     def preview(self,*_):
-        raw=self.vars['digits'].get()
-        try:n=int(raw);assert 1<=n<=12
-        except (ValueError,AssertionError):self.example.configure(text='请输入 1–12 的补零位数');self.digit_hint.configure(text='请输入 1–12 的整数');return
-        prefix=self.vars['prefix'].get() or '文件前缀'
-        self.example.configure(text=f'{prefix}-{100:0{n}d}.cas\n{prefix}-{100:0{n}d}.dat')
-        self.digit_hint.configure(text=f'{n} 位：100 → {100:0{n}d}')
+        self.example.configure(text='case2_VOF.cas.h5 → case2_VOF.cas\ncase2_VOF.dat.h5 → case2_VOF.dat')
     def browse(self,key):
         if key=='python':val=filedialog.askopenfilename(title='选择已安装 PyFluent 的 python.exe',filetypes=[('Python 程序','python.exe'),('可执行程序','*.exe')])
         else:val=filedialog.askdirectory(title='选择版本根目录，例如 v241' if key=='fluent_root' else '选择文件夹')
@@ -189,7 +176,7 @@ class App(ctk.CTk):
             header=ctk.CTkFrame(window,fg_color=C['white'],corner_radius=0)
             header.pack(fill='x')
             self.label(header,'几步完成转换',20,True).pack(anchor='w',padx=24,pady=(22,4))
-            self.label(header,'读取 H5 → 转换并验证 → 按时间步命名',12,color=C['muted']).pack(anchor='w',padx=24,pady=(0,18))
+            self.label(header,'读取 H5 → 转换并验证 → 保留原名输出',12,color=C['muted']).pack(anchor='w',padx=24,pady=(0,18))
             footer=ctk.CTkFrame(window,fg_color=C['white'],corner_radius=0)
             footer.pack(side='bottom',fill='x')
             CompletionButton(footer,text='知道了',anchor='center',width=108,height=36,fg_color=C['blue'],hover_color=C['hover'],font=self.font(13),command=window.destroy,confirm=True).pack(side='right',padx=24,pady=14)
@@ -198,16 +185,16 @@ class App(ctk.CTk):
             sections=[
                 ('怎么用',
                  '1. 选择 H5 输入文件夹和独立的结果文件夹。\n'
-                 '2. 设置前缀、补零位数和原始模型维度。\n'
-                 '3. 先“扫描文件”，再“开始转换并整理”；完成后“打开结果”。'),
+                 '2. 选择原始模型维度，转换保留源文件名。\n'
+                 '3. 先“扫描文件”，再“开始转换”；完成后“打开结果”。'),
                 ('选项怎么填',
-                 '补零位数：填 5，时间步 100 会命名为 00100，不改变实际时间步。\n'
+                 '命名规则：只移除末尾 .h5；统一前缀请到“整理文件名”设置。\n'
                  '模型维度：与原模型一致，二维选 2D，三维选 3D。\n'
-                 '重复或重新开始的时间步会放入不同 series 子文件夹。'),
+                 '一个 CASE 对应多个 DAT 时，按 DAT 原名分目录保存，文件名不变。'),
                 ('开始前需要知道',
                  '只支持 Fluent 的 .cas.h5 / .dat.h5；原始文件会保留。\n'
                  '转换需要本机 Fluent、可用许可证和已配置的 Python 环境；首次使用可到“运行环境”检查。\n'
-                 '“仅整理已有结果”需选择本工具生成且含 conversion_report.json 的结果目录。\n'
+                 '如需统一名称，请在转换完成后进入“整理文件名”页面。\n'
                  '中途停止请用“本组完成后停止”；出现问题可查看“日志详情”。'),
                 ('独立规范化已有文件名',
                  '进入“整理文件名”，开启开关，选择文件夹和文件名的统一开头。点击“检查文件并预览”，核对新旧名称后“确认改名”。\n'
@@ -248,12 +235,9 @@ class App(ctk.CTk):
         try:
             if not Path(cfg['python']).is_file():raise ValueError('请在“运行环境”中选择包含 PyFluent 的 Python 解释器。')
             if action=='convert':self.validate_environment(cfg)
-            if action!='organize' and (not cfg['input'] or not Path(cfg['input']).is_dir()):raise ValueError('请选择有效的 H5 输入文件夹。')
+            if not cfg['input'] or not Path(cfg['input']).is_dir():raise ValueError('请选择有效的 H5 输入文件夹。')
             if not cfg['output']:raise ValueError('请选择结果保存位置。')
             if Path(cfg['input']).resolve()==Path(cfg['output']).resolve():raise ValueError('输出目录必须与输入目录不同。')
-            if not re.fullmatch(r'[\w\-. ]+',cfg['prefix']) or cfg['prefix'].endswith((' ','.')):raise ValueError('请使用中英文、数字、下划线或短横线作为文件名前缀。')
-            if not 1<=int(cfg['digits'])<=12:raise ValueError('时间步补零位数需为 1—12 的整数。')
-            if action=='organize' and not (Path(cfg['output'])/'conversion_report.json').exists():raise ValueError('请选择本工具生成的结果目录，其中应包含 conversion_report.json。')
         except ValueError as e:messagebox.showerror('设置需要调整',str(e),parent=self);return
         CONFIG.write_text(json.dumps(cfg,ensure_ascii=False,indent=2),encoding='utf-8')
         cmd=[cfg['python'],'-u',str(WORKER),action]
@@ -270,7 +254,7 @@ class App(ctk.CTk):
         for c in self.controls:c.configure(state='disabled')
         self.stop.configure(state='normal' if action=='convert' else 'disabled')
         self.progress.configure(mode='indeterminate');self.progress.start()
-        self.status.set({'scan':'正在扫描文件','convert':'正在转换并回读验证','organize':'正在整理文件名','environment':'正在检查运行环境'}[action])
+        self.status.set({'scan':'正在扫描文件','convert':'正在转换并回读验证','environment':'正在检查运行环境'}[action])
         self.detail.set('详细过程已记录，可点击右侧“日志详情”查看。')
         self.append('\n任务开始：'+action+'\n日志：'+str(self.log_path)+'\n')
         threading.Thread(target=self.execute,args=(cmd,action),daemon=True).start()
@@ -299,7 +283,7 @@ class App(ctk.CTk):
                     self.normalizer.sync()
                     self.status.set('扫描完成' if rc==0 and action=='scan' else '环境检查通过' if rc==0 and action=='environment' else '完成 · 点击“打开结果”查看文件' if rc==0 else '已停止 · 下次使用相同目录可继续' if rc==2 else '任务失败 · 详细原因见日志')
                     if action=='environment':self.env_status.set('路径与 Python 依赖检查通过' if rc==0 else '环境检查失败，请查看日志')
-                    if action not in ['scan','environment']:self.detail.set('文件名对照与验证报告已保存到输出目录。' if rc==0 else '已完成文件会保留。查看日志后，可使用相同目录继续。')
+                    if action not in ['scan','environment']:self.detail.set('转换结果和验证报告已保存；文件名保持原样。' if rc==0 else '已完成文件会保留。查看日志后，可使用相同目录继续。')
                     self.append('\n'+self.status.get()+'\n')
                     if rc==1:self.show_log()
                     if rc==0 and action in self.completion_buttons:self.completion_buttons[action].success()
