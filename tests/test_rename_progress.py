@@ -67,4 +67,22 @@ class ProgressTests(unittest.TestCase):
             for timer in app.tk.call('after','info'):app.tk.call('after','cancel',timer)
             app.destroy()
 
+    def test_initial_controls_invalidate_preview_and_pass_confirmed_number(self):
+        app=App();app.withdraw()
+        try:
+            p=app.normalizer;p.enabled.set(True);p.directory.set(str(self.root));p.sync()
+            self.assertFalse(p.include_initial.get());self.assertEqual(p.initial_entry.cget('state'),'disabled')
+            captured=[];p.run_job=lambda kind,call:captured.append(call())
+            p.scan();self.assertIsNone(captured[-1]['initial_step'])
+            p.plan=captured[-1];p.initial_toggle.toggle()
+            self.assertIsNone(p.plan);self.assertEqual(p.initial_entry.cget('state'),'normal')
+            p.scan();self.assertEqual(captured[-1]['initial_step'],'0')
+            p.plan=captured[-1];p.initial_step.set('5');self.assertIsNone(p.plan)
+            p.scan();self.assertEqual(captured[-1]['initial_step'],'5')
+            app.busy=True;p.sync()
+            self.assertEqual(p.initial_toggle.cget('state'),'disabled');self.assertEqual(p.initial_entry.cget('state'),'disabled')
+        finally:
+            for timer in app.tk.call('after','info'):app.tk.call('after','cancel',timer)
+            app.destroy()
+
 if __name__=='__main__':unittest.main()

@@ -16,3 +16,5 @@ Fluent 文件转换工具 v1.0.5
 旧版本自动改名的输出请保留。新版本转换请使用新的输出目录。
 完整说明见使用说明.md，失败原因见日志详情。
 下载：https://github.com/busterclun/fluent-file-tool/releases/latest
+
+无编号初始文件：在整理文件名页勾选“将无编号配对作为初始帧”，确认初始编号（默认 0），先预览再改名。

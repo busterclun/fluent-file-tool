@@ -113,13 +113,18 @@ def step_summary(steps):
     return dict(step_count=len(nums), step_range=[nums[0], nums[-1]] if nums else [], intervals=groups)
 
 
-def preview(directory, prefix, recursive=False):
+def preview(directory, prefix, recursive=False, initial_step=None):
     root = Path(directory).absolute()
     issues = []
     def issue(code, message, paths=()):
         issues.append(dict(code=code, message=message, paths=list(paths)))
     plan = dict(schema=1, batch=uuid.uuid4().hex, created_at=datetime.now(timezone.utc).isoformat(),
-                root=str(root), prefix=prefix, recursive=bool(recursive), mapping=[], issues=issues, notice=NOTICE)
+                root=str(root), prefix=prefix, recursive=bool(recursive), initial_step=initial_step,
+                mapping=[], issues=issues, notice=NOTICE)
+    if initial_step is not None and (not isinstance(initial_step, str) or
+                                    not re.fullmatch(r'[0-9]{1,100}', initial_step)):
+        issue('initial_step', '初始编号必须填写非负整数（仅数字，最多 100 位）。')
+        initial_step = None
     error = prefix_error(prefix)
     if error:
         issue('prefix', error)
@@ -152,14 +157,28 @@ def preview(directory, prefix, recursive=False):
     tokens = []
     pairs = []
     families = set()
+    numbered_tokens = [m[2] for stem, ext, kind, h5 in files.values()
+                       if kind == 'dat' and (m := STEP.fullmatch(stem)) and m[1] and len(m[2]) <= 100]
+    padded_widths = {len(t) for t in numbered_tokens if len(t) > 1 and t.startswith('0')}
+    # Padding is only supplied for the explicitly assigned initial number.
+    # Existing numbered filenames remain unchanged and undergo the usual checks.
+    initial_token = initial_step
+    if initial_token is not None:
+        width = next(iter(padded_widths)) if len(padded_widths) == 1 else (5 if not numbered_tokens else 0)
+        initial_token = initial_token.zfill(width)
+    assigned_initial = []
     for dat, (stem, ext, kind, h5) in files.items():
         if kind != 'dat':
             continue
         match = STEP.fullmatch(stem)
-        if not match or not match[1]:
-            issue('unrecognized_step', '无法从 DAT 最后一个“-数字”识别时间步。', [dat])
-            continue
-        base, token = match.groups()
+        is_initial = not match or not match[1]
+        if is_initial:
+            if initial_token is None:
+                issue('unrecognized_step', 'DAT 没有可识别的时间步；若确认是初始帧，请启用“将无编号配对作为初始帧”并指定编号。', [dat])
+                continue
+            base, token = stem, initial_token
+        else:
+            base, token = match.groups()
         if len(token) > 100:
             issue('unrecognized_step', '时间步数字过长，无法可靠处理。', [dat])
             continue
@@ -180,6 +199,8 @@ def preview(directory, prefix, recursive=False):
                       'CASE/DAT 扩展格式不匹配。' if wrong else '缺少可可靠配对的 CASE。', [dat, *wrong])
             continue
         cas = next(iter(candidates))
+        if is_initial:
+            assigned_initial.append(dict(case=cas, data=dat, step=token))
         used[cas].append(dat); pairs.append((cas, dat, token))
         for source in (cas, dat):
             _, original_ext, file_kind, _ = files[source]
@@ -220,6 +241,9 @@ def preview(directory, prefix, recursive=False):
                            changes=sum(r['old'] != r['new'] for r in plan['mapping']),
                            unchanged=sum(r['old'] == r['new'] for r in plan['mapping']), **step_summary(tokens))
     plan['warnings'] = []
+    plan['assigned_initial'] = assigned_initial
+    if assigned_initial:
+        plan['warnings'].append(f'{len(assigned_initial)} 组无编号配对按你指定的初始编号 {initial_token} 整理；此编号未经 Fluent 内部时间步验证。')
     if plan['summary']['changes'] and any(Path(p).name in ('conversion_report.json','rename_manifest.json') for p in snap):
         plan['warnings'].append('目录含旧转换报告。本功能只更新独立的命名对照清单，不改写旧报告中的路径；更名后不能直接用旧报告继续转换或整理。')
     return plan
@@ -425,7 +449,7 @@ def execute(plan, audit_directory, *, mover=move_no_replace, progress=None):
     if audit_root.is_relative_to(root):
         raise ValueError('对照清单必须存放在扫描目录之外，避免改变待核验文件数量。')
     assert_unchanged(plan)
-    fresh = preview(root, plan['prefix'], plan['recursive'])
+    fresh = preview(root, plan['prefix'], plan['recursive'], initial_step=plan.get('initial_step'))
     if fresh['issues'] or fresh['mapping'] != plan['mapping']:
         raise ValueError('预览已失效或映射被更改，请重新扫描。')
     # A persistent exclusive batch lock prevents cooperating instances running on the same root.

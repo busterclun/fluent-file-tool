@@ -20,6 +20,7 @@ class NormalizerPage(ctk.CTkFrame):
         self.running=False;self.events=queue.Queue();self.last_auto_prefix=''
         self.enabled=tk.BooleanVar(value=False);self.recursive=tk.BooleanVar(value=False)
         self.directory=tk.StringVar();self.prefix=tk.StringVar()
+        self.include_initial=tk.BooleanVar(value=False);self.initial_step=tk.StringVar(value='0')
         self.status=tk.StringVar(value='先开启右上方的开关，再选择要整理的文件夹。')
         self.stats=tk.StringVar(value='检查后，这里会显示找到多少文件、多少组配对，以及哪些名称需要修改。')
         self.name_example=tk.StringVar();self.scope_hint=tk.StringVar()
@@ -54,7 +55,16 @@ class NormalizerPage(ctk.CTkFrame):
             radio.pack(side='left',padx=(0,12));self.scope_buttons.append(radio)
         self.scope_label=owner.label(scope,textvariable=self.scope_hint,size=12,color=colors['muted'],wraplength=420);self.scope_label.pack(anchor='w',pady=(8,0))
         scope.bind('<Configure>',lambda e:self.scope_label.configure(wraplength=max(100,e.width)))
-        self.settings=[self.path_entry,self.prefix_entry,self.browse_button,*self.scope_buttons]
+        initial=ctk.CTkFrame(fields,fg_color='transparent');initial.grid(row=3,column=0,sticky='ew',padx=18,pady=(0,14))
+        self.initial_toggle=ctk.CTkCheckBox(initial,text='将无编号配对作为初始帧',variable=self.include_initial,command=self.invalidate,
+            font=owner.font(12),checkbox_width=18,checkbox_height=18,fg_color=colors['blue'],text_color=colors['text'])
+        self.initial_toggle.grid(row=0,column=0,sticky='w')
+        owner.label(initial,'初始编号',12,color=colors['muted']).grid(row=0,column=1,padx=(20,8))
+        self.initial_entry=ctk.CTkEntry(initial,textvariable=self.initial_step,width=90,height=30,font=owner.font(12),border_color=colors['border'])
+        self.initial_entry.grid(row=0,column=2)
+        owner.label(initial,'例如 case1.cas + case1.dat：确认它们是初始文件后勾选。编号默认 0，补零位数跟随后续文件；仅有初始文件时使用 5 位。',
+            11,color=colors['muted'],wraplength=880).grid(row=1,column=0,columnspan=3,sticky='w',pady=(6,0))
+        self.settings=[self.path_entry,self.prefix_entry,self.browse_button,*self.scope_buttons,self.initial_toggle]
         preview_card=owner.card(self);preview_card.grid(row=2,column=0,rowspan=2,sticky='nsew');preview_card.grid_columnconfigure(0,weight=1);preview_card.grid_rowconfigure(2,weight=1)
         preview_header=self.step_header(preview_card,'02','核对改名前后',0)
         info=ctk.CTkFrame(preview_card,fg_color='transparent');info.grid(row=1,column=0,sticky='ew',padx=18,pady=(0,6))
@@ -95,8 +105,9 @@ class NormalizerPage(ctk.CTkFrame):
         self.more_button=self.button(foot,'更多操作…',self.more_actions,108);self.more_button.pack(side='left')
         self.execute_button=self.button(foot,'确认改名',self.execute,160,True,completion=True);self.execute_button.pack(side='right')
         self.scan_button=self.button(foot,'检查文件并预览',self.scan,158,completion=True);self.scan_button.pack(side='right',padx=(0,10))
-        owner.label(self,'时间步来自 DAT 文件名；不会启动 Fluent 读取内部计算结果。双击表格行可查看完整名称与位置。',11,color=colors['muted'],wraplength=950).grid(row=6,column=0,sticky='w',pady=(8,0))
+        owner.label(self,'时间步来自 DAT 文件名；无编号初始帧使用你指定的编号。不会读取 Fluent 内部时间步。双击表格行可查看完整名称与位置。',11,color=colors['muted'],wraplength=950).grid(row=6,column=0,sticky='w',pady=(8,0))
         self.directory.trace_add('write',self.directory_changed);self.prefix.trace_add('write',self.invalidate)
+        self.initial_step.trace_add('write',self.invalidate)
         self.update_hints();self.show_empty();self.sync();self.after(100,self.poll)
 
     def step_header(self,parent,number,title,row):
@@ -119,6 +130,7 @@ class NormalizerPage(ctk.CTkFrame):
         enabled=self.enabled.get() and not busy
         self.toggle.configure(state='disabled' if busy else 'normal')
         for widget in self.settings+[self.scan_button]:widget.configure(state='normal' if enabled else 'disabled')
+        self.initial_entry.configure(state='normal' if enabled and self.include_initial.get() else 'disabled')
         ready=enabled and ((self.plan is not None and not self.plan['issues']) or self.recovery_manifest is not None)
         label='确认恢复原名' if self.recovery_manifest else '确认改名'
         if ready and self.plan is not None:
@@ -211,9 +223,10 @@ class NormalizerPage(ctk.CTkFrame):
     def scan(self):
         if not self.enabled.get() or self.owner.busy:return
         directory=self.directory.get().strip();prefix=self.prefix.get();recursive=self.recursive.get()
+        initial_step=self.initial_step.get().strip() if self.include_initial.get() else None
         self.plan=None;self.recovery_manifest=None
         if not directory:self.status.set('请先选择文件目录。');self.sync();return
-        self.run_job('preview',lambda:engine.preview(directory,prefix,recursive))
+        self.run_job('preview',lambda:engine.preview(directory,prefix,recursive,initial_step=initial_step))
 
     def execute(self):
         if not self.enabled.get() or self.owner.busy:return
@@ -238,6 +251,8 @@ class NormalizerPage(ctk.CTkFrame):
         text=f'扫描文件总数：{s["scanned_files"]}（其中 Fluent 文件 {s["fluent_files"]}）\n时间步数：{s["step_count"]}\n时间步范围：{span}\n采样间隔：{intervals}\n\n{engine.NOTICE}\n\n'
         for warning in plan.get('warnings',[]):text+='提示：'+warning+'\n\n'
         guidance={
+            'initial_step':'请在“初始编号”中填写 0 或已确认的其他非负整数。',
+            'unrecognized_step':'如果这些确实是未开始计算的初始文件，请勾选“将无编号配对作为初始帧”，确认编号后重新预览。',
             'missing_case':'请把同一次保存对应的 CASE 文件放到这个文件夹，再重新检查。',
             'unpaired_case':'请补齐对应的 DAT 数据文件，或将不属于本次整理的 CASE 单独放到其他文件夹。',
             'ambiguous_case':'有多个 CASE 都可能对应这个 DAT，请先确认哪一组才是配套文件。',

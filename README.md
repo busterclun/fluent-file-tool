@@ -2,11 +2,11 @@
 
 Windows 桌面应用：通过本机 Ansys Fluent 将 `.cas.h5 / .dat.h5` 转换为传统 `.cas / .dat`，并提供独立的 Fluent 文件名规范化功能。
 
-**当前正式版：v1.0.5 · Windows x64**
+**当前正式版：v1.0.6 · Windows x64**
 
 ## 下载与启动
 
-1. 在 [Releases](https://github.com/busterclun/fluent-file-tool/releases/latest) 下载 `FluentFileTool-1.0.5-Windows-x64.zip`。
+1. 在 [Releases](https://github.com/busterclun/fluent-file-tool/releases/latest) 下载 `FluentFileTool-1.0.6-Windows-x64.zip`。
 2. 将压缩包完整解压到可写文件夹，双击 `Fluent文件转换工具.exe`。
 3. 首次转换前，在“运行环境”填写本机 Fluent 安装目录、Python 程序路径和版本号。
 
@@ -45,3 +45,5 @@ fuxian_fadhl-02500.dat
 真实转换此前已在 Fluent 2024 R1、PyFluent 0.37.2、二维双精度环境验证。其他 Fluent 版本、三维和其他物理模型需要在目标环境验证。文件名规范化检查只针对名称和文件元数据，不代表读取了 Fluent 内部实际时间步。
 
 应用在本机处理文件；公开下载包不含 CFD 数据、个人配置或运行日志。任务成功后显示分阶段完成反馈，失败时请查看日志详情。
+
+无编号初始文件：在“整理文件名”勾选“将无编号配对作为初始帧”，确认初始编号（默认 0），检查预览后执行。支持传统格式和 H5；补零位数跟随后续文件，配对或编号冲突会阻止执行。

@@ -216,6 +216,58 @@ class NamingTests(unittest.TestCase):
             self.assertEqual(n.fingerprint(p)['inode'],0)
 
 
+    def initial_pair(self,h5=False,name='case1'):
+        for ext in ('cas','dat'):self.put(name+'.'+ext+('.h5' if h5 else ''))
+    def test_initial_requires_explicit_opt_in(self):
+        self.initial_pair();before=self.content();p=self.plan()
+        self.assertIn('unrecognized_step',self.codes(p))
+        with self.assertRaises(ValueError):n.execute(p,self.audit)
+        self.assertEqual(before,self.content())
+    def test_initial_legacy_with_numbered_files(self):
+        self.initial_pair();self.pair('case1-1','00010')
+        p=n.preview(self.root,'out',initial_step='0');self.assertEqual(p['issues'],[])
+        self.assertEqual(p['assigned_initial'][0]['step'],'00000')
+        before={r['new']:(self.root/r['old']).read_bytes() for r in p['mapping']}
+        self.run_plan(p);self.assertEqual(self.content(),before)
+        repeated=n.preview(self.root,'out',initial_step='0')
+        self.assertEqual(repeated['issues'],[]);self.assertEqual(repeated['summary']['unchanged'],4)
+    def test_initial_h5_and_custom_number(self):
+        self.initial_pair(True);self.pair('case1-1','00010',True)
+        p=n.preview(self.root,'out',initial_step='5');self.run_plan(p)
+        self.assertTrue((self.root/'out-00005.cas.h5').exists())
+        self.assertTrue((self.root/'out-00005.dat.h5').exists())
+    def test_initial_only_defaults_five_digits(self):
+        self.initial_pair();p=n.preview(self.root,'out',initial_step='0');self.run_plan(p)
+        self.assertEqual(set(self.content()),{'out-00000.cas','out-00000.dat'})
+    def test_initial_zero_collision_blocks_all(self):
+        self.initial_pair();self.pair('saved','00000');before=self.content()
+        p=n.preview(self.root,'out',initial_step='0');self.assertIn('duplicate_step',self.codes(p))
+        with self.assertRaises(ValueError):n.execute(p,self.audit)
+        self.assertEqual(before,self.content())
+    def test_multiple_unnumbered_pairs_block_all(self):
+        self.initial_pair();self.initial_pair(name='other')
+        p=n.preview(self.root,'out',initial_step='0');self.assertIn('duplicate_step',self.codes(p))
+    def test_initial_invalid_number(self):
+        self.initial_pair()
+        for value in ('','-1','1.5','abc','１２','0'*101,0):
+            with self.subTest(value=value):
+                p=n.preview(self.root,'out',initial_step=value);self.assertIn('initial_step',self.codes(p))
+                with self.assertRaises(ValueError):n.execute(p,self.audit)
+    def test_initial_missing_case_and_format_mismatch(self):
+        self.put('case1.dat');p=n.preview(self.root,'out',initial_step='0')
+        self.assertIn('missing_case',self.codes(p))
+        self.put('case1.cas.h5');p=n.preview(self.root,'out',initial_step='0')
+        self.assertIn('format_mismatch',self.codes(p))
+    def test_initial_does_not_change_existing_numbered_padding(self):
+        self.initial_pair();self.pair('save','10');p=n.preview(self.root,'out',initial_step='0')
+        self.assertEqual(p['issues'],[]);self.assertEqual({r['step'] for r in p['mapping']},{'0','10'})
+        self.pair('other','00020');p=n.preview(self.root,'out',initial_step='0')
+        self.assertIn('padding_mismatch',self.codes(p))
+    def test_initial_shared_case_remains_blocked(self):
+        self.initial_pair();self.put('case1-00010.dat')
+        self.assertIn('case_shared',self.codes(n.preview(self.root,'out',initial_step='0')))
+
+
 @unittest.skipUnless(os.environ.get('FLUENT_TEST_VOLUME'),'Optional real volume tests')
 class VolumeNamingTests(NamingTests):
     def setUp(self):
