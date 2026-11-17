@@ -1,0 +1,90 @@
+"""Hidden-window motion verification. No mouse/keyboard automation or real CFD input."""
+from pathlib import Path
+import sys,time,unittest,tempfile
+from types import SimpleNamespace
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
+import app
+from motion_widgets import CompletionButton,SlidingSwitch,feedback_frame
+import filename_normalizer as engine
+
+
+class MotionTests(unittest.TestCase):
+    def setUp(self):
+        self.root=app.App();self.root.withdraw();self.errors=[]
+        self.root.report_callback_exception=lambda *args:self.errors.append(args)
+    def tearDown(self):
+        for timer in self.root.tk.call('after','info'):
+            try:self.root.tk.call('after','cancel',timer)
+            except Exception:pass
+        self.root.destroy();self.assertEqual(self.errors,[])
+    def pump(self,seconds):
+        until=time.monotonic()+seconds
+        while time.monotonic()<until:self.root.update();time.sleep(.008)
+    def test_geometry_phases(self):
+        self.assertEqual(feedback_frame(0,160,36)['width'],160)
+        self.assertEqual(feedback_frame(.24,160,36)['width'],36)
+        self.assertLess(len(feedback_frame(.35,160,36)['check']),len(feedback_frame(.56,160,36)['check']))
+        self.assertEqual(len(feedback_frame(.7,160,36)['particles']),10)
+        self.assertFalse(feedback_frame(.5,160,36)['particles'])
+        self.assertTrue(feedback_frame(1.28,160,36)['done'])
+    def test_animation_runs_and_does_not_change_layout_or_state(self):
+        calls=[];b=CompletionButton(self.root,text='完成',width=160,height=36,command=lambda:calls.append('clicked'))
+        b.grid(row=9,column=0);b.configure(state='disabled');before=(b.cget('width'),b.cget('height'),b.cget('state'))
+        b.success(animate_hidden=True);self.pump(.38)
+        self.assertTrue(b.feedback_running);self.assertIsNotNone(b._effect_canvas)
+        b.invoke();self.assertEqual(calls,[])
+        self.pump(1.05)
+        self.assertEqual(b.feedback_stages,['shrink','check','particles','restore'])
+        self.assertFalse(b.feedback_running);self.assertIsNone(b._effect_canvas)
+        self.assertEqual(before,(b.cget('width'),b.cget('height'),b.cget('state')))
+    def test_confirmation_closes_only_after_feedback_once(self):
+        calls=[];b=CompletionButton(self.root,text='知道了',command=lambda:calls.append('closed'),confirm=True);b.grid(row=9,column=0)
+        b.invoke();self.assertTrue(b.feedback_pending);self.assertFalse(calls)
+        b._start_feedback();b.invoke();b.invoke();self.pump(1.4)
+        self.assertEqual(calls,['closed']);self.assertEqual(b.feedback_count,1)
+    def test_destroy_during_animation_cancels_timer(self):
+        b=CompletionButton(self.root,text='完成');b.grid(row=9,column=0);b.success(animate_hidden=True)
+        self.pump(.08);b.destroy();self.pump(.1)
+        self.assertIsNone(b._effect_canvas);self.assertIsNone(b._effect_timer)
+    def test_switch_fast_reversal_and_keyboard_state(self):
+        switch=self.root.normalizer.tabs.switch
+        switch.set('检查详情');self.pump(.06);switch.set('改名前后');self.pump(.26)
+        self.assertEqual(switch.value,'改名前后');self.assertAlmostEqual(switch.position,0)
+        switch.set('检查详情');self.pump(.25)
+        self.assertEqual(self.root.normalizer.tabs.get(),'检查详情');self.assertAlmostEqual(switch.position,1)
+    def test_switch_drag_snaps(self):
+        switch=self.root.normalizer.tabs.switch
+        switch.canvas.configure(width=244,height=38);switch.canvas.place(width=244,height=38);self.root.update_idletasks()
+        switch.press(SimpleNamespace(x=10));switch.drag(SimpleNamespace(x=240));switch.release(SimpleNamespace(x=240));self.pump(.26)
+        self.assertEqual(switch.value,'检查详情');self.assertAlmostEqual(switch.position,1)
+    def test_card_alignment_and_helper_colors(self):
+        p=self.root.normalizer;a,b=p.step_headers
+        self.assertEqual(a[0].grid_info()['padx'],b[0].grid_info()['padx'])
+        self.assertEqual(a[1].cget('width'),b[1].cget('width'))
+        self.assertEqual(a[2].pack_info()['padx'],b[2].pack_info()['padx'])
+        self.assertEqual(p.example_label.cget('text_color'),app.C['muted'])
+        self.assertEqual(p.scope_label.cget('text_color'),app.C['muted'])
+    def test_all_task_buttons_use_shared_feedback(self):
+        self.assertEqual(set(self.root.completion_buttons),{'save','environment','scan','organize','convert'})
+        for button in self.root.completion_buttons.values():self.assertIsInstance(button,CompletionButton)
+        self.assertIsInstance(self.root.normalizer.scan_button,CompletionButton)
+        self.assertIsInstance(self.root.normalizer.execute_button,CompletionButton)
+    def test_failed_task_does_not_report_success(self):
+        self.root.show_log=lambda:None
+        b=self.root.completion_buttons['scan'];self.root.events.put(('done',(1,'scan')));self.root.poll()
+        self.assertEqual(b.feedback_count,0)
+        self.root.events.put(('done',(0,'scan')));self.root.poll();self.assertEqual(b.feedback_count,1)
+    def test_problem_preview_and_rollback_do_not_report_success(self):
+        with tempfile.TemporaryDirectory(prefix='motion_test_') as tmp:
+            base=Path(tmp);root=base/'files';root.mkdir();(root/'a-00100.dat').write_bytes(b'd')
+            panel=self.root.normalizer;panel.enabled.set(True)
+            bad=engine.preview(root,'test');panel.events.put(('preview',bad,None));panel.poll()
+            self.assertEqual(panel.scan_button.feedback_count,0)
+            (root/'a.cas').write_bytes(b'c');good=engine.preview(root,'test')
+            panel.events.put(('preview',good,None));panel.poll();self.assertEqual(panel.scan_button.feedback_count,1)
+            def fail(*args):raise OSError('mock failure')
+            rolled=engine.execute(good,base/'audit',mover=fail)
+            panel.events.put(('execute',rolled,None));panel.poll()
+            self.assertEqual(panel.execute_button.feedback_count,0)
+
+if __name__=='__main__':unittest.main(verbosity=2)

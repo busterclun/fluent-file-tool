@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+release/
+*.spec
+*.exe
+*.zip
+设置.json
+运行日志/
+命名记录/
+转换结果/
+*.cas
+*.dat
+*.cas.h5
+*.dat.h5
