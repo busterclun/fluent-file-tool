@@ -243,8 +243,12 @@ def main():
             before = snapshot(s, bool(d))
             s.tui.file.cff_files('no')
             s.tui.file.binary_legacy_files('yes')
-            cas = stage / 'result.cas'
-            dat = stage / 'result.dat'
+            # Copying verified outputs leaves the staging files behind. Never reuse
+            # a filename: Fluent may decline an overwrite prompt and leave old data.
+            job_stage = stage / ('job_'+str(number).zfill(6))
+            job_stage.mkdir()
+            cas = job_stage / 'result.cas'
+            dat = job_stage / 'result.dat'
             s.tui.file.write_case(str(cas))
             if d:
                 s.tui.file.write_data(str(dat))
@@ -280,6 +284,10 @@ def main():
             save_report(report_path, report)
             print(f'[{number}/{len(pending)}] VERIFIED {stem}; '
                   f'{len(checks)} complete arrays EXACT; {record["seconds"]} s', flush=True)
+            # Limit scratch space after the verified copies and journal are durable.
+            for temporary in targets:
+                try:temporary.unlink()
+                except OSError:pass  # A locked file is isolated and cannot affect later jobs.
         report['status'] = 'complete'
         report['counts'] = {'cas': len(report['jobs']),
                             'dat': sum(j['data_source'] is not None for j in report['jobs'])}

@@ -22,7 +22,7 @@ class App(ctk.CTk):
         super().__init__()
         self._initializing=True;self._close_requested=False
         self.protocol('WM_DELETE_WINDOW',self.close)
-        self.title('Fluent 文件转换工具 · v1.0.4');self.geometry('1120x820');self.minsize(1000,720)
+        self.title('Fluent 文件转换工具 · v1.0.5');self.geometry('1120x820');self.minsize(1000,720)
         self.configure(fg_color=C['bg'])
         try:config={**DEFAULTS,**json.loads(CONFIG.read_text(encoding='utf-8'))}
         except (OSError,ValueError):config=DEFAULTS

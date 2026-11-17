@@ -2,11 +2,11 @@
 
 Windows 桌面应用：通过本机 Ansys Fluent 将 `.cas.h5 / .dat.h5` 转换为传统 `.cas / .dat`，并提供独立的 Fluent 文件名规范化功能。
 
-**当前正式版：v1.0.4 · Windows x64**
+**当前正式版：v1.0.5 · Windows x64**
 
 ## 下载与启动
 
-1. 在 [Releases](https://github.com/busterclun/fluent-file-tool/releases/latest) 下载 `FluentFileTool-1.0.4-Windows-x64.zip`。
+1. 在 [Releases](https://github.com/busterclun/fluent-file-tool/releases/latest) 下载 `FluentFileTool-1.0.5-Windows-x64.zip`。
 2. 将压缩包完整解压到可写文件夹，双击 `Fluent文件转换工具.exe`。
 3. 首次转换前，在“运行环境”填写本机 Fluent 安装目录、Python 程序路径和版本号。
 

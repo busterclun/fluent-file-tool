@@ -24,6 +24,18 @@ class ConversionNameTests(unittest.TestCase):
         self.put('case2_VOF.cas.h5');self.put('case2_VOF.dat.h5');self.run_conversion()
         self.assertTrue((self.output/'case2_VOF.cas').exists());self.assertTrue((self.output/'case2_VOF.dat').exists())
         self.assertFalse((self.output/'series_01').exists())
+    def test_consecutive_jobs_never_reuse_fluent_output_paths(self):
+        for i in (1,2,3):self.put(f'case-{i}.cas.h5');self.put(f'case-{i}-{i:05d}.dat.h5')
+        paths=[]
+        def no_overwrite(path):
+            paths.append(str(path))
+            if Path(path).exists():return  # Reproduce Fluent declining an overwrite.
+            Path(path).write_bytes(b'(unique group '+str(len(paths)).encode()+b')'+b'x'*200)
+        self.session.tui.file.write_case.side_effect=no_overwrite
+        self.session.tui.file.write_data.side_effect=no_overwrite
+        self.run_conversion()
+        self.assertEqual(len(paths),6);self.assertEqual(len(set(paths)),6)
+        self.assertEqual(len({(self.output/f'case-{i}.cas').read_bytes() for i in (1,2,3)}),3)
     def test_distinct_case_and_data_names_preserved(self):
         self.put('original-36.cas.h5');self.put('original-36-02400.dat.h5');self.run_conversion()
         self.assertTrue((self.output/'original-36.cas').exists());self.assertTrue((self.output/'original-36-02400.dat').exists())
