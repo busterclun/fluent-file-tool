@@ -67,6 +67,35 @@ class MotionTests(unittest.TestCase):
         b=CompletionButton(self.root,text='完成');b.grid(row=9,column=0);b.success(animate_hidden=True)
         self.pump(.08);b.destroy();self.pump(.1)
         self.assertIsNone(b._effect_canvas);self.assertIsNone(b._effect_timer)
+    def test_hidden_fallback_is_confined_to_button(self):
+        b=self.root.completion_buttons['convert'];b.success(animate_hidden=True)
+        self.assertIs(b._effect_canvas.master,b);self.assertEqual(b._effect_pad,0)
+        self.assertIsNone(b._effect_overlay)
+    @unittest.skipUnless(sys.platform=='win32','Windows transparent overlay')
+    def test_mapped_feedback_has_transparent_nonactivating_layer_and_local_mask(self):
+        import ctypes
+        self.root.attributes('-alpha',0);self.root.geometry('1120x820+20000+20000');self.root.deiconify();self.root.update()
+        b=self.root.completion_buttons['convert'];b.success();self.pump(.1)
+        overlay=b._effect_overlay;self.assertIsNotNone(overlay)
+        self.assertEqual(str(overlay.attributes('-transparentcolor')),'#FF00FE')
+        self.assertEqual(b._effect_canvas.cget('bg'),'#FF00FE')
+        self.assertIs(b._effect_mask.master,b)
+        self.assertEqual(b._effect_mask.winfo_width(),b.winfo_width())
+        self.assertEqual(b._effect_mask.winfo_height(),b.winfo_height())
+        user=ctypes.WinDLL('user32');user.GetAncestor.argtypes=[ctypes.c_void_p,ctypes.c_uint];user.GetAncestor.restype=ctypes.c_void_p
+        user.GetWindowLongW.argtypes=[ctypes.c_void_p,ctypes.c_int];user.GetWindowLongW.restype=ctypes.c_long
+        style=user.GetWindowLongW(user.GetAncestor(overlay.winfo_id(),2),-20)
+        self.assertTrue(style&0x08000000);self.assertTrue(style&0x20)
+        b.reset_feedback();self.assertIsNone(b._effect_overlay);self.assertIsNone(b._effect_mask)
+        self.assertFalse(overlay.winfo_exists())
+    @unittest.skipUnless(sys.platform=='win32','Windows transparent overlay')
+    def test_transparent_layer_follows_button_and_is_removed_on_unmap(self):
+        self.root.attributes('-alpha',0);self.root.geometry('1120x820+20000+20000');self.root.deiconify();self.root.update()
+        b=self.root.completion_buttons['convert'];b.success();self.pump(.06)
+        self.root.geometry('1120x820+20100+20100');self.pump(.08)
+        self.assertEqual(b._effect_overlay.winfo_rootx(),b.winfo_rootx()-b._effect_pad)
+        self.root.withdraw();self.pump(.05)
+        self.assertFalse(b.feedback_running);self.assertIsNone(b._effect_overlay)
     def test_switch_fast_reversal_and_keyboard_state(self):
         switch=self.root.normalizer.tabs.switch
         switch.set('检查详情');self.pump(.06);switch.set('改名前后');self.pump(.26)

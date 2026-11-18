@@ -2,6 +2,8 @@
 import math
 import time
 import tkinter as tk
+import sys
+import ctypes
 import customtkinter as ctk
 
 
@@ -47,7 +49,7 @@ class CompletionButton(ctk.CTkButton):
     def __init__(self,master,*,command=None,confirm=False,**kwargs):
         self._action=command;self._confirm=confirm;self._effect_timer=None;self._effect_canvas=None
         self.feedback_running=False;self.feedback_pending=False;self.feedback_count=0;self.feedback_stages=[]
-        self._finish_callback=None;self._effect_window=None
+        self._finish_callback=None;self._effect_window=None;self._effect_overlay=None;self._effect_mask=None
         super().__init__(master,command=self._dispatch,**kwargs)
         tk.Misc.bind(self,'<Map>',self._mapped,add='+')
         tk.Misc.bind(self,'<Unmap>',self._unmapped,add='+')
@@ -72,6 +74,13 @@ class CompletionButton(ctk.CTkButton):
         if self._effect_canvas:
             try:self._effect_canvas.destroy()
             except tk.TclError:pass
+        if self._effect_overlay:
+            try:self._effect_overlay.destroy()
+            except tk.TclError:pass
+        if self._effect_mask:
+            try:self._effect_mask.destroy()
+            except tk.TclError:pass
+        self._effect_overlay=None;self._effect_mask=None
         self._effect_canvas=None;self.feedback_running=False;self.feedback_pending=False;self._finish_callback=None
     def success(self,on_complete=None,*,animate_hidden=False):
         if self.feedback_running:return
@@ -95,7 +104,37 @@ class CompletionButton(ctk.CTkButton):
             rgb=self.winfo_rgb(getattr(self,attr))
             setattr(self,attr,'#'+''.join(f'{v//257:02x}' for v in rgb))
         self._effect_text=self.cget('text')
-        self._effect_canvas=tk.Canvas(self._effect_window,highlightthickness=0,bd=0,bg=self._effect_bg)
+        # Mask only this button's original drawing; never paint over its siblings.
+        self._effect_mask=tk.Canvas(self,highlightthickness=0,bd=0,bg=self._effect_bg)
+        self._effect_mask.place(x=0,y=0,relwidth=1,relheight=1)
+        self._effect_mask.tk.call('raise',self._effect_mask._w)
+        self._effect_canvas=self._effect_mask
+        # Tk canvases have no transparent background. Use a color-keyed owned
+        # window for the floating shape and particles, with no opaque padding.
+        if sys.platform=='win32' and self.winfo_ismapped():
+            overlay=None
+            try:
+                key='#FF00FE'
+                overlay=tk.Toplevel(self._effect_window);overlay.withdraw()
+                overlay.overrideredirect(True);overlay.transient(self._effect_window)
+                overlay.configure(bg=key);overlay.attributes('-transparentcolor',key)
+                overlay.attributes('-alpha',self._effect_window.attributes('-alpha'))
+                overlay.update_idletasks()
+                # Do not take keyboard focus or intercept clicks outside the button.
+                user32=ctypes.WinDLL('user32',use_last_error=True)
+                user32.GetAncestor.argtypes=[ctypes.c_void_p,ctypes.c_uint];user32.GetAncestor.restype=ctypes.c_void_p
+                user32.GetWindowLongW.argtypes=[ctypes.c_void_p,ctypes.c_int];user32.GetWindowLongW.restype=ctypes.c_long
+                user32.SetWindowLongW.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_long];user32.SetWindowLongW.restype=ctypes.c_long
+                hwnd=user32.GetAncestor(overlay.winfo_id(),2)
+                style=user32.GetWindowLongW(hwnd,-20)
+                user32.SetWindowLongW(hwnd,-20,style|0x08000000|0x00000020|0x00000080)
+                self._effect_overlay=overlay
+                self._effect_canvas=tk.Canvas(overlay,highlightthickness=0,bd=0,bg=key)
+                self._effect_canvas.pack(fill='both',expand=True)
+            except (tk.TclError,OSError):
+                if overlay:overlay.destroy()
+                self._effect_overlay=None;self._effect_canvas=self._effect_mask
+        if self._effect_overlay is None:self._effect_pad=0
         self._effect_canvas.bind('<Button-1>',lambda e:'break')
         self._tick_feedback()
     def _tick_feedback(self):
@@ -108,10 +147,11 @@ class CompletionButton(ctk.CTkButton):
             if callback:callback()
             return
         cv=self._effect_canvas;p=self._effect_pad
-        x=self.winfo_rootx()-self._effect_window.winfo_rootx()-p
-        y=self.winfo_rooty()-self._effect_window.winfo_rooty()-p
-        cv.place(x=x,y=y,width=self._effect_width+2*p,height=self._effect_height+2*p)
-        cv.tk.call('raise',cv._w);cv.delete('all')
+        if self._effect_overlay:
+            x=self.winfo_rootx()-p;y=self.winfo_rooty()-p
+            self._effect_overlay.geometry(f'{self._effect_width+2*p}x{self._effect_height+2*p}{x:+d}{y:+d}')
+            self._effect_overlay.deiconify()
+        cv.delete('all')
         cx=p+self._effect_width/2;cy=p+self._effect_height/2
         fill=mix(self._effect_color,'#537D72',f['success_mix'])
         rounded(cv,cx-f['width']*s/2,cy-self._effect_height/2,cx+f['width']*s/2,cy+self._effect_height/2,f['radius']*s,fill=fill,outline='')
