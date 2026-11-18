@@ -3,6 +3,7 @@ import argparse, csv, json, os, re, sys, time
 from pathlib import Path
 from datetime import datetime
 import converter
+from environment_check import check_environment
 
 
 def main():
@@ -30,6 +31,8 @@ def main():
         for c,d,s in jobs: print(c.name+' + '+(d.name if d else '[仅 case]'))
         print('转换仅去掉末尾 .h5，保留各自原文件名；共享 CASE 的多组结果分目录保存，避免覆盖。')
         return 0
+    # Reject unsupported client/solver combinations before creating output or locks.
+    check_environment(a.version, a.fluent_root)
     a.output.mkdir(parents=True,exist_ok=True)
     lock=a.output/'.application.lock'
     try:

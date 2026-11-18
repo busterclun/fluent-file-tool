@@ -22,7 +22,7 @@ class App(ctk.CTk):
         super().__init__()
         self._initializing=True;self._close_requested=False
         self.protocol('WM_DELETE_WINDOW',self.close)
-        self.title('Fluent 文件转换工具 · v1.0.6');self.geometry('1120x820');self.minsize(1000,720)
+        self.title('Fluent 文件转换工具 · v1.0.7');self.geometry('1120x820');self.minsize(1000,720)
         self.configure(fg_color=C['bg'])
         try:config={**DEFAULTS,**json.loads(CONFIG.read_text(encoding='utf-8'))}
         except (OSError,ValueError):config=DEFAULTS
@@ -128,7 +128,7 @@ class App(ctk.CTk):
         self.button(bottom,'检查环境',self.check_environment,width=110,completion='environment').pack(side='left')
         self.button(bottom,'保存设置',self.save_settings,primary=True,width=110,completion='save').pack(side='left',padx=10)
         self.label(bottom,textvariable=self.env_status,size=12,color=C['muted']).pack(side='left',padx=6)
-        self.label(page,'环境检查验证路径和 Python 依赖；许可证会在真正启动 Fluent 时检查。',12,color=C['muted']).pack(anchor='w',pady=(0,16))
+        self.label(page,'环境检查验证路径、Python 依赖及 PyFluent 对所填 Fluent 版本的支持；许可证在启动 Fluent 时检查。',12,color=C['muted'],wraplength=850).pack(anchor='w',pady=(0,16))
     def build_footer(self):
         footer=ctk.CTkFrame(self,fg_color=C['white'],corner_radius=0);footer.grid(row=3,column=0,sticky='ew');self.footer=footer
         top=ctk.CTkFrame(footer,fg_color='transparent');top.pack(fill='x',padx=28,pady=(16,8))
@@ -227,7 +227,8 @@ class App(ctk.CTk):
         cfg=self.configuration()
         try:self.validate_environment(cfg)
         except ValueError as e:messagebox.showerror('环境设置需要调整',str(e),parent=self);return
-        cmd=[cfg['python'],'-u','-c',"import sys, numpy, ansys.fluent.core as p; print('Python '+sys.version.split()[0]+' | PyFluent '+p.__version__+' | NumPy '+numpy.__version__)"]
+        cmd=[cfg['python'],'-u',str(WORKER.with_name('environment_check.py')),
+             '--version',cfg['version'],'--fluent-root',cfg['fluent_root']]
         self.start_job(cmd,'environment')
     def run(self,action):
         if self.busy:return
@@ -282,7 +283,7 @@ class App(ctk.CTk):
                     for c in self.controls:c.configure(state='normal')
                     self.normalizer.sync()
                     self.status.set('扫描完成' if rc==0 and action=='scan' else '环境检查通过' if rc==0 and action=='environment' else '完成 · 点击“打开结果”查看文件' if rc==0 else '已停止 · 下次使用相同目录可继续' if rc==2 else '任务失败 · 详细原因见日志')
-                    if action=='environment':self.env_status.set('路径与 Python 依赖检查通过' if rc==0 else '环境检查失败，请查看日志')
+                    if action=='environment':self.env_status.set('路径、依赖与版本兼容性检查通过（未启动 Fluent）' if rc==0 else '环境检查失败，请查看日志')
                     if action not in ['scan','environment']:self.detail.set('转换结果和验证报告已保存；文件名保持原样。' if rc==0 else '已完成文件会保留。查看日志后，可使用相同目录继续。')
                     self.append('\n'+self.status.get()+'\n')
                     if rc==1:self.show_log()

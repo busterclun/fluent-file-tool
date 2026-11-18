@@ -22,6 +22,6 @@ py -3.14 -m venv .venv
 
 ## 打包
 
-在已激活构建环境的 PowerShell 中运行 `./build.ps1`。输出位于 `dist/Fluent文件转换工具/`，需完整分发该目录。PyInstaller 将 `worker.py` 和 `converter.py` 作为内部运行资源打包；无需在发行目录放置源码。
+在已激活构建环境的 PowerShell 中运行 `./build.ps1`。输出位于 `dist/Fluent文件转换工具/`，需完整分发该目录。PyInstaller 将 `worker.py`、`converter.py` 和 `environment_check.py` 作为内部运行资源打包；无需在发行目录放置源码。
 
 发行包包含 EXE、运行组件、使用说明、快速开始和第三方许可；不包含 `设置.json`。版本号为 `src/app.py` 窗口标题中的正式版本。
