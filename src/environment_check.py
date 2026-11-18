@@ -2,6 +2,7 @@
 import argparse
 import re
 import sys
+import json
 from pathlib import Path
 
 
@@ -34,11 +35,19 @@ def check_environment(version, fluent_root=''):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--version', required=True)
+    parser.add_argument('--version')
     parser.add_argument('--fluent-root', default='')
+    parser.add_argument('--describe-json', action='store_true')
     args = parser.parse_args()
     try:
-        check_environment(args.version, args.fluent_root)
+        if args.describe_json:
+            import numpy
+            import ansys.fluent.core as pyfluent
+            from ansys.fluent.core.utils.fluent_version import FluentVersion
+            print(json.dumps(dict(python=sys.version.split()[0], pyfluent=pyfluent.__version__,
+                                  numpy=numpy.__version__, supported=[v.value for v in FluentVersion])))
+        else:
+            check_environment(args.version or '', args.fluent_root)
     except Exception as exc:
         print('环境检查失败：' + str(exc), flush=True)
         return 1

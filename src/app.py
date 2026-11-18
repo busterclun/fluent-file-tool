@@ -8,6 +8,7 @@ import customtkinter as ctk
 from normalizer_ui import NormalizerPage
 from motion_widgets import CompletionButton
 from smooth_scroll import SmoothScrollableFrame
+import environment_discovery
 
 BASE=Path(sys.executable).parent if getattr(sys,'frozen',False) else Path(__file__).resolve().parent.parent
 WORKER=(Path(sys._MEIPASS)/'runtime'/'worker.py') if getattr(sys,'frozen',False) else Path(__file__).resolve().parent/'worker.py'
@@ -18,11 +19,11 @@ ctk.set_appearance_mode('light')
 ctk.set_default_color_theme('blue')
 
 class App(ctk.CTk):
-    def __init__(self):
+    def __init__(self, *, auto_detect=True):
         super().__init__()
         self._initializing=True;self._close_requested=False
         self.protocol('WM_DELETE_WINDOW',self.close)
-        self.title('Fluent 文件转换工具 · v1.0.7');self.geometry('1120x820');self.minsize(1000,720)
+        self.title('Fluent 文件转换工具 · v1.0.8');self.geometry('1120x820');self.minsize(1000,720)
         self.configure(fg_color=C['bg'])
         try:config={**DEFAULTS,**json.loads(CONFIG.read_text(encoding='utf-8'))}
         except (OSError,ValueError):config=DEFAULTS
@@ -30,6 +31,8 @@ class App(ctk.CTk):
         self.events=queue.Queue();self.busy=False;self.controls=[];self.proc=None;self.stop_path=None;self.completion_buttons={}
         self.active_page='work';self.status=tk.StringVar(value='准备就绪');self.detail=tk.StringVar(value='先扫描文件，确认配对后开始转换。')
         self.env_status=tk.StringVar(value='环境尚未检查')
+        self.detection_status=tk.StringVar(value='启动后自动寻找 Fluent 和兼容的 Python；也可以手动选择。')
+        self.detecting=False;self.detect_options={};self.pending_detection=None;self.detect_cancel=threading.Event()
         self.grid_columnconfigure(0,weight=1);self.grid_rowconfigure(2,weight=1)
         header=ctk.CTkFrame(self,fg_color=C['white'],corner_radius=0);header.grid(row=0,column=0,sticky='ew')
         mark=ctk.CTkLabel(header,text='F',width=40,height=40,corner_radius=10,fg_color=C['blue'],text_color='white',font=self.font(23,True));mark.pack(side='left',padx=(28,14),pady=20)
@@ -51,6 +54,7 @@ class App(ctk.CTk):
         # CTk.mainloop performs its own initial window setup before entering Tk.
         # An idle callback can run inside that setup; defer until the event loop starts.
         if self._close_requested:self.after(100,self.close)
+        elif auto_detect:self.after(350,self.detect_environment)
     def font(self,size=14,bold=False):return ctk.CTkFont(family='Microsoft YaHei UI',size=size,weight='bold' if bold else 'normal')
     def label(self,parent,text='',size=14,bold=False,color=None,**kw):
         return ctk.CTkLabel(parent,text=text,font=self.font(size,bold),text_color=color or C['text'],anchor='w',justify='left',**kw)
@@ -112,7 +116,15 @@ class App(ctk.CTk):
         page=SmoothScrollableFrame(self.content,fg_color='transparent',corner_radius=0);self.pages['environment']=page
         intro=ctk.CTkFrame(page,fg_color='transparent');intro.pack(fill='x',pady=(2,14))
         self.label(intro,'连接本机 Fluent',20,True).pack(anchor='w')
-        self.label(intro,'通常只需配置一次。这里的两条路径分别指向 Fluent 安装文件夹和 Python 程序。',13,color=C['muted']).pack(anchor='w',pady=(5,0))
+        self.label(intro,'启动时自动检索；优先保留有效配置，找到兼容环境后自动填写下方路径。',13,color=C['muted']).pack(anchor='w',pady=(5,0))
+        detection=self.card(page);detection.pack(fill='x',pady=(0,12))
+        detection_row=ctk.CTkFrame(detection,fg_color='transparent');detection_row.pack(fill='x',padx=18,pady=(14,8))
+        self.detect_choice=ctk.CTkOptionMenu(detection_row,values=['等待检索'],command=self.select_detected_environment,
+            font=self.font(12),fg_color=C['soft'],button_color=C['blue'],text_color=C['text'],height=34,state='disabled')
+        self.detect_choice.pack(side='left',fill='x',expand=True);self.controls.append(self.detect_choice)
+        self.detect_button=self.button(detection_row,'重新检索',self.detect_environment,width=100)
+        self.detect_button.pack(side='right',padx=(12,0))
+        self.label(detection,textvariable=self.detection_status,size=12,color=C['muted'],wraplength=850).pack(anchor='w',padx=18,pady=(0,14))
         env=self.card(page);env.pack(fill='x')
         self.section(env,'01','Fluent 安装位置','用于启动求解器进行真实格式转换。')
         self.path_field(env,'fluent_root','Fluent 安装根目录 · 选择文件夹','选择版本根文件夹，例如 v241。其内部应有 fluent 文件夹。','示例：E:\\Program Files\\ANSYS Inc\\v241')
@@ -208,6 +220,36 @@ class App(ctk.CTk):
                 card.bind('<Configure>',lambda event,label=copy:label.configure(wraplength=max(100,event.width-32)))
         if show:window.deiconify();window.lift();window.focus_set()
     def configuration(self):return {k:v.get().strip() for k,v in self.vars.items()}
+    def detect_environment(self):
+        if self.detecting or self.busy:return
+        self.detecting=True;self.detect_cancel.clear();self.detect_button.configure(state='disabled')
+        self.detect_choice.configure(state='disabled')
+        self.detection_status.set('正在后台检索安装位置和兼容的 Python… 页面可继续操作。')
+        cfg=self.configuration();snapshot=tuple(cfg[k] for k in environment_discovery.ENV_KEYS)
+        def work():
+            try:result=environment_discovery.detect(cfg,BASE,WORKER.with_name('environment_check.py'),self.detect_cancel)
+            except Exception as exc:result=dict(options=[],reason='检索未完成：'+str(exc))
+            if not self.detect_cancel.is_set():self.events.put(('environment_detected',(snapshot,result)))
+        threading.Thread(target=work,daemon=True).start()
+    def apply_detection(self,snapshot,result):
+        self.detecting=False;self.detect_button.configure(state='normal')
+        self.detect_options={f'Fluent {item["version"]} · PyFluent {item["pyfluent"]} · 环境 {i}':item for i,item in enumerate(result['options'],1)}
+        labels=list(self.detect_options)
+        self.detect_choice.configure(values=labels or ['未找到兼容环境'],state='normal' if labels else 'disabled')
+        self.detect_choice.set(labels[0] if labels else '未找到兼容环境')
+        current=tuple(self.vars[k].get().strip() for k in environment_discovery.ENV_KEYS)
+        if labels and current==snapshot:
+            self.select_detected_environment(labels[0])
+        elif labels:
+            self.detection_status.set(f'找到 {len(labels)} 套兼容组合；你在检索期间修改了路径，已保留你的输入。可从列表选择。')
+        else:
+            self.detection_status.set(result['reason']+' 未修改当前配置。')
+    def select_detected_environment(self,label):
+        if self.busy or label not in self.detect_options:return
+        chosen=self.detect_options[label]
+        for key in environment_discovery.ENV_KEYS:self.vars[key].set(chosen[key])
+        self.detection_status.set(f'已选兼容组合（共 {len(self.detect_options)} 套），路径与版本已填入下方。需要记住此选择时点击“保存设置”。')
+        self.env_status.set('自动检索：路径与版本兼容性通过，尚未启动 Fluent 或验证许可证。')
     def validate_environment(self,cfg):
         if not Path(cfg['python']).is_file():raise ValueError('Python 路径应选择实际的 python.exe 文件。')
         if Path(cfg['python']).name.lower()!='python.exe':raise ValueError('请选择 python.exe，不是文件夹或 pythonw.exe。')
@@ -278,6 +320,8 @@ class App(ctk.CTk):
                     self.append(data)
                     if 'VERIFIED' in data:self.detail.set(data.strip()[:140])
                     if data.startswith('发现 '):self.detail.set(data.strip())
+                elif kind=='environment_detected':
+                    self.pending_detection=data
                 else:
                     rc,action=data;self.busy=False;self.progress.stop();self.progress.configure(mode='determinate');self.progress.set(1 if rc==0 else 0);self.stop.configure(state='disabled')
                     for c in self.controls:c.configure(state='normal')
@@ -292,6 +336,10 @@ class App(ctk.CTk):
         except Exception:
             self.report_callback_exception(*sys.exc_info())
         finally:
+            if self.pending_detection is not None and not self.busy:
+                data=self.pending_detection;self.pending_detection=None;self.apply_detection(*data)
+            self.detect_button.configure(state='disabled' if self.busy or self.detecting else 'normal')
+            self.detect_choice.configure(state='normal' if self.detect_options and not self.busy and not self.detecting else 'disabled')
             self.after(100,self.poll)
     def report_callback_exception(self,exc_type,exc_value,exc_traceback):
         # Optional UI feedback must never leave a blocking overlay behind.
@@ -310,7 +358,7 @@ class App(ctk.CTk):
             self._close_requested=True
             return
         if self.busy:messagebox.showinfo('任务正在运行','请等待当前任务结束；Fluent 转换任务可点击“本组完成后停止”。',parent=self);return
-        self.destroy()
+        self.detect_cancel.set();self.destroy()
 
 if __name__=='__main__':
     app=App()

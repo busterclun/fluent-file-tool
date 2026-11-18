@@ -38,7 +38,7 @@ class ProgressTests(unittest.TestCase):
         restored=[e for e in events if e['phase']=='rollback']
         self.assertTrue(restored);self.assertEqual(restored[-1]['done'],4)
     def test_ui_progress_keeps_task_busy_until_verified_result(self):
-        app=App();app.withdraw();errors=[];app.report_callback_exception=lambda *args:errors.append(args)
+        app=App(auto_detect=False);app.withdraw();errors=[];app.report_callback_exception=lambda *args:errors.append(args)
         try:
             panel=app.normalizer;panel.enabled.set(True)
             def slow_move(src,dst):time.sleep(.13);n.move_no_replace(src,dst)
@@ -55,7 +55,7 @@ class ProgressTests(unittest.TestCase):
             for timer in app.tk.call('after','info'):app.tk.call('after','cancel',timer)
             app.destroy()
     def test_verify_does_not_show_completed_and_failure_stops_animation(self):
-        app=App();app.withdraw()
+        app=App(auto_detect=False);app.withdraw()
         try:
             p=app.normalizer;p.running=True;app.busy=True
             p.events.put(('progress',dict(phase='verify',done=4,total=4,current=''),None));p.poll()
@@ -68,7 +68,7 @@ class ProgressTests(unittest.TestCase):
             app.destroy()
 
     def test_initial_controls_invalidate_preview_and_pass_confirmed_number(self):
-        app=App();app.withdraw()
+        app=App(auto_detect=False);app.withdraw()
         try:
             p=app.normalizer;p.enabled.set(True);p.directory.set(str(self.root));p.sync()
             self.assertFalse(p.include_initial.get());self.assertEqual(p.initial_entry.cget('state'),'disabled')

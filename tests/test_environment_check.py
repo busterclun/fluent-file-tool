@@ -73,7 +73,7 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_gui_passes_selected_version_and_root_to_probe(self):
         from app import App
-        app=App();app.withdraw()
+        app=App(auto_detect=False);app.withdraw()
         try:
             cfg={'python':'selected-python','version':'24.1.0','fluent_root':'selected-root'}
             with patch.object(app,'configuration',return_value=cfg),patch.object(app,'validate_environment'),patch.object(app,'start_job') as start:

@@ -10,7 +10,7 @@ import filename_normalizer as engine
 
 class MotionTests(unittest.TestCase):
     def setUp(self):
-        self.root=app.App();self.root.withdraw();self.errors=[]
+        self.root=app.App(auto_detect=False);self.root.withdraw();self.errors=[]
         self.root.report_callback_exception=lambda *args:self.errors.append(args)
     def tearDown(self):
         for timer in self.root.tk.call('after','info'):
