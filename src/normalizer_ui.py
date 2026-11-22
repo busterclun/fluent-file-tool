@@ -31,7 +31,10 @@ class NormalizerPage(ctk.CTkFrame):
         owner.label(title,'把名称统一为“前缀-时间步”，只改名字，文件内容和位置都保留。',12,color=colors['muted'],height=20).pack(anchor='w',pady=(2,0))
         self.toggle=ctk.CTkSwitch(head,text='启用文件名整理',variable=self.enabled,font=owner.font(13),progress_color=colors['blue'],text_color=colors['text'],command=self.invalidate)
         self.toggle.pack(side='right',padx=(14,0))
+        self.settings_button=self.button(head,'收起设置',self.toggle_settings,110)
+        self.settings_button.pack(side='right',padx=(10,0))
         fields=owner.card(self);fields.grid(row=1,column=0,sticky='ew',pady=(0,10));fields.grid_columnconfigure(0,weight=1)
+        self.fields=fields;self.settings_collapsed=False
         self.step_headers=[]
         self.step_header(fields,'01','选择文件与命名',0)
         pathrow=ctk.CTkFrame(fields,fg_color='transparent');pathrow.grid(row=1,column=0,sticky='ew',padx=18,pady=(0,12));pathrow.grid_columnconfigure(1,weight=1)
@@ -103,6 +106,8 @@ class NormalizerPage(ctk.CTkFrame):
         self.progress_box.grid_remove();self._progress_phase=None;self._progress_fraction=0;self._staged_progress=False
         foot=ctk.CTkFrame(self,fg_color='transparent');foot.grid(row=5,column=0,sticky='ew',pady=(10,0))
         self.more_button=self.button(foot,'更多操作…',self.more_actions,108);self.more_button.pack(side='left')
+        self.details_button=self.button(foot,'查看问题 / 详情',self.open_details,145)
+        self.details_button.pack(side='left',padx=(10,0))
         self.execute_button=self.button(foot,'确认改名',self.execute,160,True,completion=True);self.execute_button.pack(side='right')
         self.scan_button=self.button(foot,'检查文件并预览',self.scan,158,completion=True);self.scan_button.pack(side='right',padx=(0,10))
         owner.label(self,'时间步来自 DAT 文件名；无编号初始帧使用你指定的编号。不会读取 Fluent 内部时间步。双击表格行可查看完整名称与位置。',11,color=colors['muted'],wraplength=950).grid(row=6,column=0,sticky='w',pady=(8,0))
@@ -203,7 +208,32 @@ class NormalizerPage(ctk.CTkFrame):
         if path:self.directory.set(path)
 
     def set_details(self,text):
+        self.details_text=text
         self.details.configure(state='normal');self.details.delete('1.0','end');self.details.insert('1.0',text);self.details.configure(state='disabled')
+
+    def toggle_settings(self):
+        self.settings_collapsed=not self.settings_collapsed
+        if self.settings_collapsed:self.fields.grid_remove()
+        else:self.fields.grid()
+        self.settings_button.configure(text='修改目录与规则' if self.settings_collapsed else '收起设置')
+
+    def open_details(self):
+        window=getattr(self,'detail_window',None)
+        if window is None or not window.winfo_exists():
+            window=ctk.CTkToplevel(self.owner);self.detail_window=window
+            window.title('问题与检查详情');window.geometry('880x620');window.minsize(580,380);window.transient(self.owner)
+            self.owner.label(window,'问题与检查详情',18,True).pack(anchor='w',padx=20,pady=(18,10))
+            self.detail_box=ctk.CTkTextbox(window,font=self.owner.font(13),wrap='word')
+            self.detail_box.pack(fill='both',expand=True,padx=20,pady=(0,12))
+            footer=ctk.CTkFrame(window,fg_color='transparent');footer.pack(fill='x',padx=20,pady=(0,16))
+            def copy():
+                window.clipboard_clear();window.clipboard_append(self.details_text)
+            self.button(footer,'复制全部',copy,100).pack(side='left')
+            self.button(footer,'打开记录文件夹',self.open_record,145).pack(side='left',padx=10)
+            self.button(footer,'关闭',window.destroy,90).pack(side='right')
+        self.detail_box.configure(state='normal');self.detail_box.delete('1.0','end')
+        self.detail_box.insert('1.0',self.details_text);self.detail_box.configure(state='disabled');self.detail_box.yview_moveto(0)
+        window.deiconify();window.lift()
 
     def run_job(self,kind,call):
         if self.owner.busy:return
@@ -238,6 +268,7 @@ class NormalizerPage(ctk.CTkFrame):
             self.run_job('execute',lambda:engine.execute(plan,self.audit_directory,progress=self.enqueue_progress))
 
     def show_plan(self,plan):
+        if not self.settings_collapsed:self.toggle_settings()
         self.display_root=plan['root']
         self.table.delete(*self.table.get_children());self.row_details.clear();self.show_table()
         for row in plan['mapping']:
@@ -279,7 +310,7 @@ class NormalizerPage(ctk.CTkFrame):
         status=result['status'];success=result.get('success',0) if status=='verified' else 0
         unchanged=sum(r['old']==r['new'] for r in result['rows'])
         errors=([result['error']] if result.get('error') else [])+result.get('recovery_errors',[])
-        headline={'verified':'完成 · 文件名和元数据核验通过','rolled_back':'本批次已恢复原文件名','recovery_failed':'恢复未完成 · 请查看下方当前状态和失败项'}.get(status,status)
+        headline={'verified':'完成 · 文件名和元数据核验通过','rolled_back':'本批次已恢复原文件名','recovery_failed':'恢复未完成 · 点击“查看问题 / 详情”'}.get(status,status)
         self.status.set(headline)
         s=plan['summary'];self.stats.set(f'扫描 {s["scanned_files"]} 文件    时间步 {s["step_count"]}    配对 {s["pair_count"]}    成功 {success}    无需修改 {unchanged}    问题 {len(errors)}')
         text=self.details.get('1.0','end').replace('文件配对和名称检查通过。请核对“改名前后”，再点击“确认改名”。','')+'\n\n'+headline+f'\n成功：{success}；无需修改：{unchanged}；问题：{len(errors)}\n对照清单：{Path(self.last_manifest).parent / "文件名对照.csv"}\n批次校验及恢复记录：{self.last_manifest}\n'
@@ -287,6 +318,11 @@ class NormalizerPage(ctk.CTkFrame):
         if result.get('states'):
             text+='\n\n当前文件状态：\n'+'\n'.join(f'{s["old"]} → 当前：{s["found"] or "未能按原元数据定位"}' for s in result['states'])
             if status=='recovery_failed':text+='\n\n候选路径及当前元数据：\n'+json.dumps(result['states'],ensure_ascii=False,indent=2)
+        if errors:
+            first=headline+'\n\n问题原因：\n'+'\n\n'.join(f'{i}. {e}' for i,e in enumerate(errors,1))
+            if any('WinError 5' in e or 'WinError 32' in e for e in errors):
+                first+='\n\nWindows 拒绝访问或文件被占用。请核对报错中的具体路径；若指向 batch.json，失败的是改名记录写入，不等于 CFD 文件损坏。占用程序或权限原因尚需确认。'
+            text=first+f'\n\n记录位置：{self.last_manifest}\n\n──────── 完整检查记录 ────────\n'+text
         self.set_details(text);self.tabs.set('检查详情')
         if status=='verified':
             for item,row in zip(self.table.get_children(),plan['mapping']):self.table.set(item,'status','无需修改' if row['old']==row['new'] else '已完成')
@@ -360,6 +396,8 @@ class NormalizerPage(ctk.CTkFrame):
             elif ok:self.progress_text.set('恢复完成 · 本批次已恢复原文件名')
             else:self.progress_text.set('恢复未完成 · 请保留文件和记录，查看问题详情')
         self.sync()
+        if error or (kind=='preview' and result.get('issues')) or (kind!='preview' and result and result.get('status')!='verified'):
+            self.open_details()
         if not error:
             if kind=='preview' and not result['issues']:self.scan_button.success()
             elif kind=='execute' and result['status']=='verified':self.execute_button.success()

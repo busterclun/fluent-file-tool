@@ -23,7 +23,7 @@ class App(ctk.CTk):
         super().__init__()
         self._initializing=True;self._close_requested=False
         self.protocol('WM_DELETE_WINDOW',self.close)
-        self.title('Fluent 文件转换工具 · v1.0.9');self.geometry('1120x820');self.minsize(1000,720)
+        self.title('Fluent 文件转换工具 · v1.0.10');self.geometry('1120x820');self.minsize(1000,720)
         self.configure(fg_color=C['bg'])
         try:config={**DEFAULTS,**json.loads(CONFIG.read_text(encoding='utf-8'))}
         except (OSError,ValueError):config=DEFAULTS
@@ -55,6 +55,21 @@ class App(ctk.CTk):
         # An idle callback can run inside that setup; defer until the event loop starts.
         if self._close_requested:self.after(100,self.close)
         elif auto_detect:self.after(350,self.detect_environment)
+    def mainloop(self,*args,**kwargs):
+        # CTk's titlebar setup pumps events before entering the real main loop.
+        # A close arriving there must wait until every startup WM call finishes.
+        self._initializing=True
+        try:
+            if not self._window_exists:
+                if sys.platform.startswith('win'):
+                    self._windows_set_titlebar_color(self._get_appearance_mode())
+                    if not self._withdraw_called_before_window_exists and not self._iconify_called_before_window_exists:
+                        self.deiconify()
+                self._window_exists=True
+        finally:self._initializing=False
+        if self._close_requested:
+            self.close();return
+        return tk.Tk.mainloop(self,*args,**kwargs)
     def font(self,size=14,bold=False):return ctk.CTkFont(family='Microsoft YaHei UI',size=size,weight='bold' if bold else 'normal')
     def label(self,parent,text='',size=14,bold=False,color=None,**kw):
         return ctk.CTkLabel(parent,text=text,font=self.font(size,bold),text_color=color or C['text'],anchor='w',justify='left',**kw)
